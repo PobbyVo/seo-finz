@@ -1,0 +1,212 @@
+{
+  "overall": "PASS",
+  "ports": {
+    "api": 51895,
+    "web": 51896,
+    "cdp": 51897
+  },
+  "results": {
+    "T27": {
+      "status": "PASS",
+      "details": {
+        "dialogOpened": true,
+        "autoNavigated": true
+      }
+    },
+    "T28": {
+      "status": "PASS",
+      "details": {
+        "stayedAfterStayBtn": true,
+        "stayedAfterEsc": true
+      }
+    },
+    "T28_NEGATIVE_CANCEL_AND_ERROR": {
+      "status": "PASS",
+      "details": {
+        "noGhostNavAfterRouteSwitch": true,
+        "noPopupOnInvalidSubmit": true,
+        "switchedProjectOk": true,
+        "noGhostNavAfterProjectSwitch": true
+      }
+    },
+    "R2_STALE_FRESHNESS_AND_EXPORT_UI": {
+      "status": "PASS",
+      "details": {
+        "officialBtnDisabledInitially": true,
+        "officialBtnEnabledAfterApproval": true,
+        "officialDisabledAfterImport": true,
+        "showsStaleBriefBanner": true,
+        "showsSupersededExportBadge": true,
+        "silentHistStatus": 409,
+        "ackHistStatus": 200
+      }
+    },
+    "T29": {
+      "status": "PASS",
+      "details": {
+        "a11yChecks": {
+          "darkMeta": true,
+          "tableFocusable": true,
+          "hasReducedMotionRule": true
+        },
+        "allViewportsOk": true,
+        "routesTested": 9,
+        "screenMatrix": {
+          "/projects": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/01-topic": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/02-demand-map": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/03-semrush": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/04-upload": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/05-evidence": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/06-mapping": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/steps/07-brief": {
+            "320": {
+              "scrollWidth": 355,
+              "innerWidth": 355,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          },
+          "/approvals": {
+            "320": {
+              "scrollWidth": 320,
+              "innerWidth": 320,
+              "noOverflow": true
+            },
+            "768": {
+              "scrollWidth": 768,
+              "innerWidth": 768,
+              "noOverflow": true
+            },
+            "1440": {
+              "scrollWidth": 1440,
+              "innerWidth": 1440,
+              "noOverflow": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

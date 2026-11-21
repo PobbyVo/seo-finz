@@ -1,0 +1,112 @@
+{
+  "task_id": "FINZ-16-QA-R2",
+  "run_id": "FINZ-16-QA-R2-20261121-1332",
+  "date_utc": "2026-11-21",
+  "repository": "https://github.com/quocan050302/Finz",
+  "target_branch": "fix/v1-6-quality-gates-mapping-qa",
+  "main_sha_verified_unchanged": "60448cc667113b8bbd7e2ac5a0449c836974cbaf",
+  "r2_baseline_sha": "2e6c5573cb90c0701ffe9b84f31d1c0f77ea3dd9",
+  "r2_code_commits": [
+    {
+      "sha": "2e7f55c4ad9cb3bfa4b942085c01bdf39d1f20b7",
+      "message": "fix(finz): harden SERP snapshot provenance and evidence freshness"
+    },
+    {
+      "sha": "6fa1dc1930ef0521577025803fe37235a6f1fde0",
+      "message": "fix(ci): stabilize headless Chrome E2E on Linux runners with route pre-warming"
+    }
+  ],
+  "final_verified_source_sha": "6fa1dc1930ef0521577025803fe37235a6f1fde0",
+  "policy_version": "1.6.2",
+  "environment": {
+    "local_os": "macOS (darwin)",
+    "ci_os": "ubuntu-latest",
+    "cpu_cores": 8,
+    "bounded_parallel_workers": 4,
+    "node": "v22.22.3",
+    "python": "3.13.0",
+    "sqlite": "3.45.3",
+    "alembic_head_before": "0002_revision_fingerprint_and_serp_provenance",
+    "alembic_head_after": "0003_snapshot_integrity_and_export_provenance"
+  },
+  "baseline_before_r2_edits": {
+    "pytest_existing": { "command": "services/api/.venv/bin/pytest services/api/tests -q", "exit_code": 0, "summary": "20 passed in 4.42s" },
+    "web_typecheck": { "command": "npm --prefix apps/web run typecheck", "exit_code": 0 },
+    "web_build": { "command": "npm --prefix apps/web run build", "exit_code": 0, "routes_prerendered": 15 },
+    "web_lint_observation": "apps/web `next lint` prompts interactively (unconfigured ESLint in Next 15); not used as fake CI gate.",
+    "phase1_red_repro": {
+      "command": "services/api/.venv/bin/pytest services/api/tests/test_r2_p0a_serp_snapshots.py services/api/tests/test_r2_p0b_freshness_invalidation.py services/api/tests/test_r2_p1_backup_f2_downgrade.py -v --tb=short",
+      "exit_code": 1,
+      "summary": "10 failed in 3.78s (reproduced cross-batch Top-10 merge, duplicate organic rank certification, post-approval stale metrics/SERP bypass, preview-to-confirm file tamper acceptance, missing effective DB URL resolver)",
+      "evidence_file": "phase1_red_repro.log"
+    }
+  },
+  "final_local_verification": {
+    "serial_vs_parallel_pytest": {
+      "command": "services/api/.venv/bin/python scripts/qa-parallel-check.py",
+      "exit_code": 0,
+      "serial_cases": 31,
+      "serial_passed": 31,
+      "serial_elapsed_s": 10.833,
+      "parallel_workers": 4,
+      "parallel_cases": 31,
+      "parallel_passed": 31,
+      "parallel_elapsed_s": 12.122,
+      "serialized_migration_modules": [
+        "test_p1_backup_migration_uploads_e2e.py",
+        "test_r2_p1_backup_f2_downgrade.py"
+      ],
+      "case_identity_parity": true,
+      "divergences": {},
+      "serial_parallel_parity": true,
+      "evidence_file": "parallel_parity.json"
+    },
+    "local_db_temp_copy_migration_and_downgrade_reject": {
+      "exit_code": 0,
+      "source_db_untouched": "data/finz_workbench.sqlite3",
+      "target_revision": "0003_snapshot_integrity_and_export_provenance",
+      "quick_check": "ok",
+      "foreign_key_check": "0 violations",
+      "projects_preserved": 2,
+      "pre_migration_backups_created": 1,
+      "downgrade_0001_rejected": true
+    },
+    "web_typecheck": { "command": "npm --prefix apps/web run typecheck", "exit_code": 0 },
+    "web_build": { "command": "npm --prefix apps/web run build", "exit_code": 0, "routes_prerendered": 15 },
+    "headless_chrome_e2e": {
+      "command": "node scripts/qa-browser-t27-t29.mjs",
+      "exit_code": 0,
+      "T27": "PASS",
+      "T28": "PASS",
+      "T28_NEGATIVE_CANCEL_AND_ERROR": "PASS",
+      "R2_STALE_FRESHNESS_AND_EXPORT_UI": "PASS",
+      "T29": "PASS",
+      "routes_tested_responsive": 9,
+      "evidence_file": "browser_e2e.json"
+    },
+    "git_diff_check": { "command": "git diff --check", "exit_code": 0 }
+  },
+  "remote_github_actions_ci": {
+    "initial_run_before_ci_fix": {
+      "run_id": 44910764159,
+      "head_sha": "2e7f55c4ad9cb3bfa4b942085c01bdf39d1f20b7",
+      "status": "completed",
+      "conclusion": "failure",
+      "notes": "Backend job succeeded; Web E2E job timed out during cold next dev route compilation on 2-vCPU ubuntu-latest; fixed in 6fa1dc1."
+    },
+    "verified_code_run": {
+      "run_id": 44911120993,
+      "head_sha": "6fa1dc1930ef0521577025803fe37235a6f1fde0",
+      "html_url": "https://github.com/quocan050302/Finz/actions/runs/44911120993",
+      "status": "completed",
+      "conclusion": "success",
+      "jobs": [
+        { "id": 136866952957, "name": "Backend Regression, Migrations & Serial/Parallel Parity", "conclusion": "success" },
+        { "id": 136866952707, "name": "Web Typecheck, Build & Real Headless Chrome E2E", "conclusion": "success" }
+      ]
+    }
+  },
+  "secrets_leaked": false,
+  "paid_ai_apis_called_in_r2": false,
+  "verdict": "PASS"
+}

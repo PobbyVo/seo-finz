@@ -1,0 +1,152 @@
+{
+  "python": "3.13.0",
+  "cpu_count": 8,
+  "bounded_workers": 4,
+  "modules_count": 10,
+  "parallel_modules_count": 8,
+  "serialized_migration_modules": [
+    "test_p1_backup_migration_uploads_e2e.py",
+    "test_r2_p1_backup_f2_downgrade.py"
+  ],
+  "serial": {
+    "exit_code": 0,
+    "elapsed_s": 10.833,
+    "cases_count": 31,
+    "passed_count": 31,
+    "summary": [
+      "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+      "======================== 31 passed, 1 warning in 8.91s ========================="
+    ]
+  },
+  "parallel": {
+    "exit_code": 0,
+    "elapsed_s": 12.122,
+    "cases_count": 31,
+    "passed_count": 31,
+    "modules": [
+      {
+        "module": "test_p0_qa_r1_gates_serp_revisions.py",
+        "exit_code": 0,
+        "elapsed_s": 4.13,
+        "cases_count": 4,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 4 passed, 1 warning in 2.84s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_p1_backup_migration_uploads_e2e.py",
+        "exit_code": 0,
+        "elapsed_s": 3.963,
+        "cases_count": 5,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 5 passed, 1 warning in 2.91s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_r2_p0a_serp_snapshots.py",
+        "exit_code": 0,
+        "elapsed_s": 5.009,
+        "cases_count": 5,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 5 passed, 1 warning in 3.79s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_r2_p0b_freshness_invalidation.py",
+        "exit_code": 0,
+        "elapsed_s": 4.199,
+        "cases_count": 3,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 3 passed, 1 warning in 2.89s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_r2_p1_backup_f2_downgrade.py",
+        "exit_code": 0,
+        "elapsed_s": 1.819,
+        "cases_count": 3,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 3 passed, 1 warning in 1.08s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_t01_t05_projects_taxonomy.py",
+        "exit_code": 0,
+        "elapsed_s": 2.317,
+        "cases_count": 3,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 3 passed, 1 warning in 1.35s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_t06_t10_ai_settings_gemini_fallback.py",
+        "exit_code": 0,
+        "elapsed_s": 2.219,
+        "cases_count": 4,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 4 passed, 1 warning in 1.15s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_t11_t14_demand_map_critic.py",
+        "exit_code": 0,
+        "elapsed_s": 1.688,
+        "cases_count": 2,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 2 passed, 1 warning in 0.66s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_t15_t20_semrush_evidence_gates.py",
+        "exit_code": 0,
+        "elapsed_s": 1.616,
+        "cases_count": 1,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 1 passed, 1 warning in 0.64s ========================="
+        ],
+        "stderr_tail": []
+      },
+      {
+        "module": "test_t21_t26_mapping_approvals_brief_export.py",
+        "exit_code": 0,
+        "elapsed_s": 1.707,
+        "cases_count": 1,
+        "stdout_tail": [
+          "",
+          "-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html",
+          "========================= 1 passed, 1 warning in 0.89s ========================="
+        ],
+        "stderr_tail": []
+      }
+    ]
+  },
+  "case_identity_parity": true,
+  "divergences": {},
+  "serial_parallel_parity": true
+}

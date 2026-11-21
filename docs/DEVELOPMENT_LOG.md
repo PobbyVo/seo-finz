@@ -37,3 +37,20 @@
   - Legacy `0001` → `0002` migration on temp copy of local DB: PASS (`quick_check=ok`, `foreign_key_check=0`).
   - `tsc --noEmit` & `next build`: PASS.
   - Detailed QA report: `docs/qa-runs/FINZ-16-QA-R1-20261121-1953/`.
+
+## 2026-11-21 — FINZ-16-QA-R2 (Coherent SERP Snapshots, Auto Freshness Invalidation, Effective DB Backup, F2 Manifest, Downgrade Reject & Real CI)
+
+- **Branch:** `fix/v1-6-quality-gates-mapping-qa` (baseline `2e6c5573cb90c0701ffe9b84f31d1c0f77ea3dd9`, final verified source SHA `6fa1dc1930ef0521577025803fe37235a6f1fde0`, `main` unchanged at `60448cc667113b8bbd7e2ac5a0449c836974cbaf`).
+- **Implemented:**
+  - **P0-A (Policy `v1.6.2`):** Coherent single-snapshot SERP evaluation (`eligibility_policy.py`) prohibiting cross-batch Top-10 or >=3 URL merging, rejecting duplicate Organic ranks, hashing ALL valid URLs in the selected snapshot, and recording full `snapshot_identity`.
+  - **P0-B:** Automatic transactional freshness invalidation (`reconcile_project_freshness()` inside `confirm_semrush_import()`) + dynamic `live_fingerprint` checks across Mapping, Approvals (`409`), Briefs, and Exports (`409 HISTORICAL_EXPORT_SUPERSEDED` on unacknowledged outdated historical download while preserving original immutable bytes).
+  - **P1-C:** Effective SQLite path resolution via `sqlalchemy.engine.make_url` (`resolve_sqlite_db_path()` in `db.py`, wired in `alembic/env.py`) so custom `FINZ_DATABASE_URL` backs up the actual target DB and fails closed on errors.
+  - **P1-D:** Complete tamper-evident F2 import manifest (`manifest_sha256` over ALL `EvidenceRow`s + preview-to-confirm streaming SHA-256 verification + per-request disk verification); legacy batches missing manifest classify as `UNVERIFIED`.
+  - **P1-E:** Forward migration `0003_snapshot_integrity_and_export_provenance` and explicit `FINZ_UNSUPPORTED_DOWNGRADE` exceptions in `0002` & `0003` `downgrade()`.
+  - **QA-F:** Added `.github/workflows/finz-qa.yml`, upgraded `scripts/qa-parallel-check.py` (exact per-case nodeid parity), and expanded `scripts/qa-browser-t27-t29.mjs` (dynamic ports, route pre-warming, popup timer negative tests, stale freshness/export UI E2E, and 9-screen responsive verification).
+- **Verification:**
+  - Serial vs bounded-parallel (4 workers) `pytest`: 31/31 PASS (`case_identity_parity=true`, `serial_parallel_parity=true`).
+  - Temp copy local DB migration `0001 -> 0003` + downgrade rejection: PASS (`quick_check=ok`, `foreign_key_check=0`, `projects_preserved=2`, `backups=1`).
+  - Headless Chrome E2E (`scripts/qa-browser-t27-t29.mjs`): PASS across all 5 suites & 9 core screens.
+  - Real GitHub Actions CI (`ubuntu-latest`) Run `#44911120993` on `6fa1dc1930ef0521577025803fe37235a6f1fde0`: **completed / success** (both Backend and Web+Chrome E2E jobs).
+  - Detailed QA report: `docs/qa-runs/FINZ-16-QA-R2-20261121-1332/`.
