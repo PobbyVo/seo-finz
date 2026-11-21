@@ -1,0 +1,72 @@
+{
+  "task_id": "FINZ-16-QA-R1",
+  "run_id": "FINZ-16-QA-R1-20261121-1953",
+  "date": "2026-11-21",
+  "repository": "https://github.com/quocan050302/Finz",
+  "target_branch": "fix/v1-6-quality-gates-mapping-qa",
+  "base_sha": "60448cc667113b8bbd7e2ac5a0449c836974cbaf",
+  "final_source_sha": "74b81763e08c39a79de862cb86623669d702ffc8",
+  "main_sha_verified_unchanged": "60448cc667113b8bbd7e2ac5a0449c836974cbaf",
+  "policy_version": "1.6.1",
+  "environment": {
+    "os": "macOS (darwin)",
+    "cpu_cores": 8,
+    "bounded_parallel_workers": 4,
+    "ram_gb": 16,
+    "node": "v22.22.3",
+    "python": "3.13.0",
+    "sqlite": "3.45.3",
+    "alembic_head_before": "0001_initial_schema",
+    "alembic_head_after": "0002_revision_fingerprint_and_serp_provenance"
+  },
+  "baseline_before_edits": {
+    "pytest_existing": { "command": "services/api/.venv/bin/pytest services/api/tests -q", "exit_code": 0, "summary": "11 passed" },
+    "p0_repro_before_fix": { "command": "services/api/.venv/bin/pytest services/api/tests/test_p0_qa_r1_gates_serp_revisions.py -v", "exit_code": 1, "summary": "4 failed (G1/G5/G6/G8, G2/G3/G4, M1-M6, real Semrush SERP fixture reproduced)" },
+    "typecheck": { "command": "npm --prefix apps/web run typecheck", "exit_code": 0 },
+    "next_build": { "command": "npm --prefix apps/web run build", "exit_code": 0 }
+  },
+  "final_verification": {
+    "serial_vs_parallel_pytest": {
+      "command": "services/api/.venv/bin/python scripts/qa-parallel-check.py",
+      "exit_code": 0,
+      "serial_passed": 20,
+      "serial_failed": 0,
+      "serial_elapsed_s": 6.497,
+      "parallel_workers": 4,
+      "parallel_passed": 20,
+      "parallel_failed": 0,
+      "parallel_elapsed_s": 4.714,
+      "serial_parallel_parity": true
+    },
+    "headless_chrome_e2e_t27_t29": {
+      "command": "node scripts/qa-browser-t27-t29.mjs",
+      "exit_code": 0,
+      "T27": "PASS",
+      "T28": "PASS",
+      "UI_OFFICIAL_GATING": "PASS",
+      "T29": "PASS"
+    },
+    "local_db_copy_migration_0001_to_0002": {
+      "exit_code": 0,
+      "quick_check": "ok",
+      "foreign_key_check": "0 violations",
+      "target_revision": "0002_revision_fingerprint_and_serp_provenance",
+      "projects_preserved": 2
+    },
+    "typecheck_web": { "command": "npm --prefix apps/web run typecheck", "exit_code": 0 },
+    "build_web": { "command": "npm --prefix apps/web run build", "exit_code": 0, "routes_prerendered": 15 },
+    "git_diff_check": { "command": "git diff --check", "exit_code": 0 },
+    "owner_authorized_live_gemini_ping": {
+      "scope": "OPTIONAL_LIVE_CHECK_SEPARATE_FROM_AUTOMATED_MOCK_TESTS",
+      "ok": true,
+      "status": "CONNECTED",
+      "requested_model": "auto",
+      "actual_model": "gemini-3.5-flash-lite",
+      "discovered_text_models": 16,
+      "auto_downgrade_steps_verified": 8,
+      "latency_ms": 37174,
+      "secret_persisted_in_repo": false
+    }
+  },
+  "verdict": "PASS"
+}
