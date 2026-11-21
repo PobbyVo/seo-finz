@@ -156,7 +156,7 @@ function main() {
       cwd: WEB_DIR,
       env: {
         ...process.env,
-        NEXT_PUBLIC_API_BASE: '',
+        NEXT_PUBLIC_API_BASE: `http://127.0.0.1:${API_PORT}`,
         FINZ_API_INTERNAL_URL: `http://127.0.0.1:${API_PORT}`,
       },
     }

@@ -171,20 +171,43 @@ def sanitize_secret_text(text: str) -> str:
     return cleaned[:400]
 
 
+def _extract_provider_message(body_text: str) -> str:
+    import json
+
+    if not body_text:
+        return ""
+    try:
+        parsed = json.loads(body_text)
+        if isinstance(parsed, dict):
+            err = parsed.get("error")
+            if isinstance(err, dict) and err.get("message"):
+                return sanitize_secret_text(str(err["message"]))[:220]
+            if isinstance(err, str):
+                return sanitize_secret_text(err)[:220]
+            if parsed.get("message"):
+                return sanitize_secret_text(str(parsed["message"]))[:220]
+    except Exception:
+        pass
+    return sanitize_secret_text(body_text.strip())[:180]
+
+
 def normalize_http_error(status_code: int, body_text: str = "") -> StandardizedError:
     low = body_text.lower()
+    upstream_msg = _extract_provider_message(body_text)
+    suffix = f" ({upstream_msg})" if upstream_msg else ""
+
     if status_code == 401:
-        return build_error("API_KEY_INVALID", detail="HTTP 401 Unauthorized", http_status=401)
+        return build_error("API_KEY_INVALID", detail=f"HTTP 401 Unauthorized{suffix}", http_status=401)
     if status_code == 400 and ("api key" in low or "api_key_invalid" in low or "invalid api key" in low):
-        return build_error("API_KEY_INVALID", detail="API key bị nhà cung cấp từ chối", http_status=400)
+        return build_error("API_KEY_INVALID", detail=f"API key bị nhà cung cấp từ chối{suffix}", http_status=400)
     if status_code == 403:
-        return build_error("PERMISSION_DENIED", detail="HTTP 403 Forbidden", http_status=403)
+        return build_error("PERMISSION_DENIED", detail=f"HTTP 403 Forbidden{suffix}", http_status=403)
     if status_code == 404 or ("not found" in low and "model" in low):
-        return build_error("MODEL_NOT_FOUND", detail=f"HTTP {status_code}: model không tồn tại hoặc chưa được hỗ trợ", http_status=status_code)
+        return build_error("MODEL_NOT_FOUND", detail=f"HTTP {status_code}: model không tồn tại hoặc chưa được hỗ trợ{suffix}", http_status=status_code)
     if status_code == 429:
         if "quota" in low or "billing" in low or "insufficient_quota" in low or "resource_exhausted" in low:
-            return build_error("QUOTA_EXCEEDED", detail="HTTP 429 Quota/Resource Exhausted", http_status=429)
-        return build_error("RATE_LIMITED", detail="HTTP 429 Too Many Requests", http_status=429)
+            return build_error("QUOTA_EXCEEDED", detail=f"HTTP 429 Quota/Resource Exhausted{suffix}", http_status=429)
+        return build_error("RATE_LIMITED", detail=f"HTTP 429 Too Many Requests{suffix}", http_status=429)
     if status_code >= 500:
-        return build_error("PROVIDER_UNAVAILABLE", detail=f"HTTP {status_code} Server Error", http_status=status_code)
-    return build_error("INVALID_PROVIDER_RESPONSE", detail=f"HTTP {status_code}", http_status=status_code)
+        return build_error("PROVIDER_UNAVAILABLE", detail=f"HTTP {status_code} Server Error{suffix}", http_status=status_code)
+    return build_error("INVALID_PROVIDER_RESPONSE", detail=f"HTTP {status_code}{suffix}", http_status=status_code)

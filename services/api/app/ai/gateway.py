@@ -222,7 +222,20 @@ class AIProviderGateway:
         db.commit()
 
         adapter = self.adapters[provider]
-        result = adapter.test_connection(config)
+        try:
+            result = adapter.test_connection(config)
+        except Exception as exc:
+            err = build_error("PROVIDER_UNAVAILABLE", detail=str(exc))
+            result = TestConnectionResult(
+                ok=False,
+                provider=provider,
+                requested_model=config.model_id,
+                actual_model=config.model_id,
+                latency_ms=0,
+                status="ERROR",
+                message=err.reason,
+                error=err.to_dict(),
+            )
 
         now = datetime.now(timezone.utc)
         setting.last_tested_at = now

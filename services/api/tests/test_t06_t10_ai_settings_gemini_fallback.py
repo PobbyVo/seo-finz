@@ -123,6 +123,9 @@ def test_gemini_auto_latest_and_downgrade_after_3_errors(client):
                     "models": [
                         {"name": "models/gemini-4-argon", "supportedGenerationMethods": ["generateContent"]},
                         {"name": "models/gemini-3.8-flash", "supportedGenerationMethods": ["generateContent"]},
+                        {"name": "models/gemini-3.1-flash-image", "supportedGenerationMethods": ["generateContent"]},
+                        {"name": "models/gemini-3.5-transcribe", "supportedGenerationMethods": ["generateContent"]},
+                        {"name": "models/gemini-nano-banana-2.1", "supportedGenerationMethods": ["generateContent"]},
                         {"name": "models/gemini-2.5-flash", "supportedGenerationMethods": ["generateContent"]},
                         {"name": "models/gemini-embedding-2", "supportedGenerationMethods": ["embedContent"]},
                     ]
@@ -172,11 +175,14 @@ def test_gemini_auto_latest_and_downgrade_after_3_errors(client):
     assert body["fallback_events"][0]["to_model"] == "gemini-3.8-flash"
     assert body["fallback_events"][0]["failures_on_model"] == 3
 
-    # Persisted active_model_id is now gemini-3.8-flash
+    # Persisted active_model_id is now gemini-3.8-flash and non-text models are filtered out
     settings_after = tc.get("/api/v1/settings/ai").json()
     gem = next(p for p in settings_after["providers"] if p["provider"] == "gemini")
     assert gem["active_model_id"] == "gemini-3.8-flash"
     assert "gemini-4-argon" in (gem["last_downgrade_reason"] or "")
+    assert "gemini-3.1-flash-image" not in gem["fallback_chain"]
+    assert "gemini-3.5-transcribe" not in gem["fallback_chain"]
+    assert "gemini-nano-banana-2.1" not in gem["fallback_chain"]
 
     # Reset back to newest works cleanly
     reset = tc.post("/api/v1/settings/ai/gemini/reset-latest")

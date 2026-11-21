@@ -26,9 +26,12 @@ def _serialize_provider(row: AIProviderSetting) -> dict[str, Any]:
     if row.provider != "mock" and not row.secret_ref and env_var:
         storage_mode = f"env:{env_var}"
 
-    chain = json.loads(row.fallback_chain_json or "[]")
-    if row.provider == "gemini" and not chain:
-        chain = list(DEFAULT_GEMINI_FALLBACK_CHAIN)
+    raw_chain = json.loads(row.fallback_chain_json or "[]")
+    chain = (
+        build_effective_chain(configured_model=row.model_id, existing_chain=raw_chain, auto_latest=row.auto_latest)
+        if row.provider == "gemini"
+        else raw_chain
+    )
     failure_counts = json.loads(row.failure_counts_json or "{}")
 
     return {

@@ -208,6 +208,14 @@ export default function AISettingsPage() {
       await refreshAISettings();
     } catch (err) {
       if (err instanceof ApiError && err.structured) setError(err.structured);
+      else
+        setError({
+          code: 'CONNECTION_TIMEOUT',
+          reason: err instanceof Error ? err.message : String(err),
+          impact: 'Không nhận được kết quả kiểm tra kết nối từ backend.',
+          solution: 'Kiểm tra log terminal `npm run dev` và thử bấm Kiểm tra kết nối lại.',
+          next_action: 'Thử lại sau khi kiểm tra kết nối.',
+        });
     } finally {
       setTesting(false);
     }
@@ -229,6 +237,14 @@ export default function AISettingsPage() {
       await refreshAISettings();
     } catch (err) {
       if (err instanceof ApiError && err.structured) setError(err.structured);
+      else
+        setError({
+          code: 'CONNECTION_TIMEOUT',
+          reason: err instanceof Error ? err.message : String(err),
+          impact: 'Không nhận được kết quả kiểm tra kết nối từ backend.',
+          solution: 'Kiểm tra log terminal `npm run dev` và thử bấm Kiểm tra kết nối lại.',
+          next_action: 'Thử lại sau khi kiểm tra kết nối.',
+        });
     } finally {
       setSyncingModels(false);
     }

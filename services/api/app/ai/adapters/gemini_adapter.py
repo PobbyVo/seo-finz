@@ -16,11 +16,14 @@ from app.ai.adapters.base import (
 )
 from app.ai.errors import StandardizedError, build_error, normalize_http_error
 
-# Ordered newest/flagship -> high-speed latest -> stable fallback
+# Ordered newest/flagship -> fast latest -> stable fallback
 DEFAULT_GEMINI_FALLBACK_CHAIN: list[str] = [
-    "gemini-4-argon",
     "gemini-4-carbon",
+    "gemini-4-argon",
+    "gemini-4-neon",
+    "gemini-4-hydrogen",
     "gemini-3.8-flash",
+    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
     "gemini-3.1-pro-preview",
     "gemini-2.5-pro",
@@ -40,12 +43,16 @@ DOWNGRADABLE_ERROR_CODES: set[str] = {
     "INVALID_PROVIDER_RESPONSE",
 }
 
+# Filter out non-text / image / audio / specialized models returned by /v1beta/models
 _EXCLUDED_MODEL_TOKENS = (
     "embedding",
     "imagen",
+    "image",
     "veo",
     "tts",
     "audio",
+    "speech",
+    "transcribe",
     "live",
     "aqa",
     "bison",
@@ -53,20 +60,45 @@ _EXCLUDED_MODEL_TOKENS = (
     "robotics",
     "computer-use",
     "deep-research",
+    "customtools",
+    "banana",
+    "omni",
+    "vision",
+    "translate",
+    "learnlm",
+    "gemma",
 )
+
+MAX_CHAIN_LENGTH = 12
+
+
+def _is_usable_text_gemini_model(model_id: str) -> bool:
+    low = model_id.lower().strip()
+    if not low.startswith("gemini-"):
+        return False
+    if any(tok in low for tok in _EXCLUDED_MODEL_TOKENS):
+        return False
+    # Exclude generic rolling aliases when versioned models are present
+    if low in {"gemini-pro-latest", "gemini-flash-latest", "gemini-flash-lite-latest"}:
+        return False
+    return True
 
 
 def _model_rank_key(model_id: str) -> tuple[float, int, int, str]:
-    """Sort Gemini text models newest-first: higher version -> pro/argon/carbon > flash > flash-lite -> non-exp."""
+    """Sort Gemini text models newest-first: higher version -> carbon/argon/pro > neon/hydrogen/flash > flash-lite -> stable."""
     low = model_id.lower()
     m = re.search(r"gemini-(\d+(?:\.\d+)?)", low)
     version = float(m.group(1)) if m else 0.0
 
     tier = 2
     if "carbon" in low or "ultra" in low:
-        tier = 5
+        tier = 6
     elif "argon" in low or "pro" in low:
+        tier = 5
+    elif "neon" in low:
         tier = 4
+    elif "hydrogen" in low:
+        tier = 3
     elif "flash-lite" in low or "lite" in low:
         tier = 1
     elif "flash" in low:
@@ -82,38 +114,40 @@ def build_effective_chain(
     discovered: list[str] | None = None,
     auto_latest: bool = True,
 ) -> list[str]:
-    """Construct deduplicated newest -> fallback Gemini model chain."""
+    """Construct concise, deduplicated newest -> fallback Gemini text-model chain."""
     chain: list[str] = []
     seen: set[str] = set()
 
-    def add(m: str) -> None:
+    def add(m: str, *, allow_custom: bool = False) -> None:
         cleaned = m.strip()
         if cleaned.startswith("models/"):
             cleaned = cleaned[len("models/") :]
-        if cleaned and cleaned != "auto" and cleaned not in seen:
-            seen.add(cleaned)
-            chain.append(cleaned)
+        if not cleaned or cleaned == "auto" or cleaned in seen:
+            return
+        if not allow_custom and not _is_usable_text_gemini_model(cleaned):
+            return
+        seen.add(cleaned)
+        chain.append(cleaned)
 
     # If user picked a specific model and auto_latest is False, start with that model first
     if configured_model and configured_model != "auto" and not auto_latest:
-        add(configured_model)
+        add(configured_model, allow_custom=True)
 
-    # Discovered models from Google API sorted newest-first take top precedence when auto_latest is True
+    # When Google's /v1beta/models returned live models, prioritize those discovered models!
     if discovered:
         for m in sorted(discovered, key=_model_rank_key, reverse=True):
             add(m)
-
-    if configured_model and configured_model != "auto":
-        add(configured_model)
-
-    if existing_chain:
-        for m in existing_chain:
-            add(m)
+    else:
+        if configured_model and configured_model != "auto":
+            add(configured_model, allow_custom=True)
+        if existing_chain:
+            for m in existing_chain:
+                add(m)
 
     for m in DEFAULT_GEMINI_FALLBACK_CHAIN:
         add(m)
 
-    return chain
+    return chain[:MAX_CHAIN_LENGTH]
 
 
 class GeminiAdapter(AIProviderAdapter):
@@ -130,18 +164,21 @@ class GeminiAdapter(AIProviderAdapter):
     def __init__(self, http_client: httpx.Client | None = None) -> None:
         self._http_client = http_client
 
-    def _client(self, timeout: float) -> httpx.Client:
-        if self._http_client is not None:
-            return self._http_client
-        return httpx.Client(timeout=timeout)
-
-    def discover_latest_models(self, api_key: str, endpoint_url: str, timeout: float = 12.0) -> list[str]:
-        """Fetch generateContent-capable Gemini models from Google API and sort newest-first."""
+    def discover_latest_models(
+        self,
+        api_key: str,
+        endpoint_url: str,
+        timeout: float = 8.0,
+        client: httpx.Client | None = None,
+    ) -> list[str]:
+        """Fetch generateContent-capable text Gemini models from Google API and sort newest-first."""
         url = f"{endpoint_url.rstrip('/')}/models"
-        close_after = self._http_client is None
-        client = self._client(timeout)
+        active_client = client or self._http_client
+        close_after = active_client is None
+        if active_client is None:
+            active_client = httpx.Client(timeout=timeout)
         try:
-            resp = client.get(url, headers={"x-goog-api-key": api_key})
+            resp = active_client.get(url, headers={"x-goog-api-key": api_key}, timeout=timeout)
             if resp.status_code != 200:
                 return []
             payload = resp.json()
@@ -153,10 +190,7 @@ class GeminiAdapter(AIProviderAdapter):
                 if "generateContent" not in methods:
                     continue
                 short = name[len("models/") :] if name.startswith("models/") else name
-                low = short.lower()
-                if not low.startswith("gemini-"):
-                    continue
-                if any(tok in low for tok in _EXCLUDED_MODEL_TOKENS):
+                if not _is_usable_text_gemini_model(short):
                     continue
                 found.append(short)
             return sorted(set(found), key=_model_rank_key, reverse=True)
@@ -164,11 +198,12 @@ class GeminiAdapter(AIProviderAdapter):
             return []
         finally:
             if close_after:
-                client.close()
+                active_client.close()
 
     def _call_single_model(
         self,
         *,
+        client: httpx.Client,
         api_key: str,
         endpoint_url: str,
         model_id: str,
@@ -176,21 +211,23 @@ class GeminiAdapter(AIProviderAdapter):
         user_prompt: str,
         timeout: float,
         max_output_tokens: int = 4096,
+        require_json_mime: bool = True,
     ) -> tuple[str | None, StandardizedError | None]:
         url = f"{endpoint_url.rstrip('/')}/models/{model_id}:generateContent"
+        gen_cfg: dict[str, Any] = {
+            "temperature": 0.2,
+            "maxOutputTokens": max_output_tokens,
+        }
+        if require_json_mime:
+            gen_cfg["responseMimeType"] = "application/json"
+
         body: dict[str, Any] = {
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": max_output_tokens,
-                "responseMimeType": "application/json",
-            },
+            "generationConfig": gen_cfg,
         }
         if system_prompt:
             body["systemInstruction"] = {"parts": [{"text": system_prompt}]}
 
-        close_after = self._http_client is None
-        client = self._client(timeout)
         try:
             resp = client.post(
                 url,
@@ -199,14 +236,12 @@ class GeminiAdapter(AIProviderAdapter):
                     "x-goog-api-key": api_key,
                 },
                 json=body,
+                timeout=timeout,
             )
         except httpx.TimeoutException:
-            return None, build_error("CONNECTION_TIMEOUT", detail=f"Model {model_id} quá thời gian chờ ({timeout}s)")
+            return None, build_error("CONNECTION_TIMEOUT", detail=f"Model {model_id} quá thời gian chờ ({timeout:.0f}s)")
         except httpx.RequestError as exc:
             return None, build_error("PROVIDER_UNAVAILABLE", detail=f"Lỗi kết nối tới Gemini ({exc.__class__.__name__})")
-        finally:
-            if close_after:
-                client.close()
 
         if resp.status_code != 200:
             return None, normalize_http_error(resp.status_code, resp.text)
@@ -217,10 +252,17 @@ class GeminiAdapter(AIProviderAdapter):
             if not candidates:
                 return None, build_error("INVALID_PROVIDER_RESPONSE", detail="Gemini không trả về candidates nào.")
             parts = (candidates[0].get("content") or {}).get("parts") or []
-            text_chunks = [str(p.get("text", "")) for p in parts if "text" in p]
+            # Skip internal thought-only parts if present, collect text output parts
+            text_chunks = [
+                str(p.get("text", ""))
+                for p in parts
+                if "text" in p and not p.get("thought", False)
+            ]
+            if not text_chunks:
+                text_chunks = [str(p.get("text", "")) for p in parts if "text" in p]
             combined = "".join(text_chunks).strip()
             if not combined:
-                return None, build_error("INVALID_PROVIDER_RESPONSE", detail="Gemini trả về nội dung rỗng.")
+                return None, build_error("INVALID_PROVIDER_RESPONSE", detail=f"Model {model_id} trả về nội dung rỗng.")
             return combined, None
         except Exception as exc:
             return None, build_error("INVALID_PROVIDER_RESPONSE", detail=str(exc))
@@ -233,118 +275,147 @@ class GeminiAdapter(AIProviderAdapter):
         *,
         discover_first: bool = False,
         max_output_tokens: int = 4096,
+        is_health_ping: bool = False,
     ) -> tuple[bool, str, dict[str, Any], list[str], list[ModelFallbackEvent], dict[str, int], StandardizedError | None, int]:
         """
         Core Gemini execution engine:
-        - Picks newest model first (when auto_latest=True).
+        - Picks newest text model first (when auto_latest=True).
         - Tracks consecutive failures per model.
         - After `downgrade_threshold` (default 3) errors on a model, automatically downgrades
-          to the next model in `fallback_chain` and continues seamlessly!
+          to the next model in `fallback_chain` and continues seamlessly.
         """
         started = time.perf_counter()
         if not config.api_key:
             err = build_error("AI_NOT_CONFIGURED")
             return False, config.model_id or DEFAULT_GEMINI_FALLBACK_CHAIN[0], {}, [], [], dict(config.failure_counts), err, 0
 
-        discovered: list[str] = []
-        if discover_first and config.auto_latest:
-            discovered = self.discover_latest_models(config.api_key, config.endpoint_url, timeout=min(config.timeout_seconds, 10.0))
+        close_after = self._http_client is None
+        per_call_timeout = 8.0 if is_health_ping else max(25.0, float(config.timeout_seconds or 45.0))
+        # Guard against indefinite hangs during multi-model ping (disabled for injected mock clients)
+        total_budget_s = 45.0 if (is_health_ping and self._http_client is None) else 110.0
+        client = self._http_client if self._http_client is not None else httpx.Client(timeout=per_call_timeout)
 
-        chain = build_effective_chain(
-            configured_model=config.model_id,
-            existing_chain=config.fallback_chain,
-            discovered=discovered,
-            auto_latest=config.auto_latest,
-        )
-        threshold = max(1, int(config.downgrade_threshold or 3))
-        failure_counts = dict(config.failure_counts or {})
-        fallback_events: list[ModelFallbackEvent] = []
-        last_error: StandardizedError | None = None
-
-        # Start from the configured model if it's in the chain (so already-downgraded models stay active
-        # unless user resets to latest or auto_latest discovered a newer working set during test)
-        start_idx = 0
-        if not discover_first and config.model_id and config.model_id != "auto" and config.model_id in chain:
-            start_idx = chain.index(config.model_id)
-
-        idx = start_idx
-        while idx < len(chain):
-            current_model = chain[idx]
-            while True:
-                raw_text, call_err = self._call_single_model(
-                    api_key=config.api_key,
-                    endpoint_url=config.endpoint_url,
-                    model_id=current_model,
-                    system_prompt=system_prompt,
-                    user_prompt=user_prompt,
-                    timeout=config.timeout_seconds,
-                    max_output_tokens=max_output_tokens,
+        try:
+            discovered: list[str] = []
+            if discover_first and config.auto_latest:
+                discovered = self.discover_latest_models(
+                    config.api_key,
+                    config.endpoint_url,
+                    timeout=6.0,
+                    client=client,
                 )
 
-                if call_err is None and raw_text is not None:
-                    try:
-                        parsed = extract_json_object(raw_text)
-                        failure_counts[current_model] = 0
+            chain = build_effective_chain(
+                configured_model=config.model_id,
+                existing_chain=config.fallback_chain,
+                discovered=discovered,
+                auto_latest=config.auto_latest,
+            )
+            threshold = max(1, int(config.downgrade_threshold or 3))
+            failure_counts = dict(config.failure_counts or {})
+            fallback_events: list[ModelFallbackEvent] = []
+            last_error: StandardizedError | None = None
+
+            start_idx = 0
+            if not discover_first and config.model_id and config.model_id != "auto" and config.model_id in chain:
+                start_idx = chain.index(config.model_id)
+
+            idx = start_idx
+            while idx < len(chain):
+                current_model = chain[idx]
+                while True:
+                    if (time.perf_counter() - started) > total_budget_s:
                         elapsed_ms = int((time.perf_counter() - started) * 1000)
-                        return True, current_model, parsed, discovered, fallback_events, failure_counts, None, elapsed_ms
-                    except Exception as exc:
-                        call_err = build_error("INVALID_PROVIDER_RESPONSE", detail=str(exc))
-
-                assert call_err is not None
-                last_error = call_err
-
-                # Invalid API key fails globally — do not waste retries or downgrade
-                if call_err.code not in DOWNGRADABLE_ERROR_CODES:
-                    elapsed_ms = int((time.perf_counter() - started) * 1000)
-                    return False, current_model, {}, discovered, fallback_events, failure_counts, call_err, elapsed_ms
-
-                failure_counts[current_model] = failure_counts.get(current_model, 0) + 1
-
-                if failure_counts[current_model] >= threshold:
-                    # Reached 3 errors -> automatically downgrade to next model in chain!
-                    if idx + 1 < len(chain):
-                        next_model = chain[idx + 1]
-                        fallback_events.append(
-                            ModelFallbackEvent(
-                                from_model=current_model,
-                                to_model=next_model,
-                                failures_on_model=failure_counts[current_model],
-                                error_code=call_err.code,
-                                reason=(
-                                    f"Model {current_model} lỗi {failure_counts[current_model]}/{threshold} lần "
-                                    f"({call_err.code}) → tự động hạ xuống {next_model}."
-                                ),
-                            )
+                        timeout_err = last_error or build_error(
+                            "CONNECTION_TIMEOUT",
+                            detail=f"Kiểm tra kết nối vượt quá {int(total_budget_s)}s khi thử tới model {current_model}.",
                         )
-                        idx += 1
-                        break
-                    else:
+                        return False, current_model, {}, discovered, fallback_events, failure_counts, timeout_err, elapsed_ms
+
+                    raw_text, call_err = self._call_single_model(
+                        client=client,
+                        api_key=config.api_key,
+                        endpoint_url=config.endpoint_url,
+                        model_id=current_model,
+                        system_prompt=system_prompt,
+                        user_prompt=user_prompt,
+                        timeout=per_call_timeout,
+                        max_output_tokens=max_output_tokens,
+                        require_json_mime=not is_health_ping,
+                    )
+
+                    if call_err is None and raw_text is not None:
+                        if is_health_ping:
+                            try:
+                                parsed = extract_json_object(raw_text)
+                            except Exception:
+                                parsed = {"ok": True, "reply": raw_text[:120]}
+                            failure_counts[current_model] = 0
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            return True, current_model, parsed, discovered, fallback_events, failure_counts, None, elapsed_ms
+                        try:
+                            parsed = extract_json_object(raw_text)
+                            failure_counts[current_model] = 0
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            return True, current_model, parsed, discovered, fallback_events, failure_counts, None, elapsed_ms
+                        except Exception as exc:
+                            call_err = build_error("INVALID_PROVIDER_RESPONSE", detail=str(exc))
+
+                    assert call_err is not None
+                    last_error = call_err
+
+                    # Invalid API key fails globally — do not waste retries or downgrade
+                    if call_err.code not in DOWNGRADABLE_ERROR_CODES:
                         elapsed_ms = int((time.perf_counter() - started) * 1000)
                         return False, current_model, {}, discovered, fallback_events, failure_counts, call_err, elapsed_ms
 
-                # Below threshold (e.g., 1/3 or 2/3): retry same model cleanly in this request loop
-                # until it succeeds or reaches 3 failures to trigger downgrade.
+                    failure_counts[current_model] = failure_counts.get(current_model, 0) + 1
 
-        elapsed_ms = int((time.perf_counter() - started) * 1000)
-        return (
-            False,
-            chain[min(idx, len(chain) - 1)],
-            {},
-            discovered,
-            fallback_events,
-            failure_counts,
-            last_error or build_error("PROVIDER_UNAVAILABLE"),
-            elapsed_ms,
-        )
+                    if failure_counts[current_model] >= threshold:
+                        if idx + 1 < len(chain):
+                            next_model = chain[idx + 1]
+                            fallback_events.append(
+                                ModelFallbackEvent(
+                                    from_model=current_model,
+                                    to_model=next_model,
+                                    failures_on_model=failure_counts[current_model],
+                                    error_code=call_err.code,
+                                    reason=(
+                                        f"Model {current_model} lỗi {failure_counts[current_model]}/{threshold} lần "
+                                        f"({call_err.code}) → tự động hạ xuống {next_model}."
+                                    ),
+                                )
+                            )
+                            idx += 1
+                            break
+                        else:
+                            elapsed_ms = int((time.perf_counter() - started) * 1000)
+                            return False, current_model, {}, discovered, fallback_events, failure_counts, call_err, elapsed_ms
+
+            elapsed_ms = int((time.perf_counter() - started) * 1000)
+            return (
+                False,
+                chain[min(idx, len(chain) - 1)],
+                {},
+                discovered,
+                fallback_events,
+                failure_counts,
+                last_error or build_error("PROVIDER_UNAVAILABLE"),
+                elapsed_ms,
+            )
+        finally:
+            if close_after:
+                client.close()
 
     def test_connection(self, config: ProviderConfig) -> TestConnectionResult:
         requested = config.model_id or "auto"
         ok, actual_model, _data, discovered, events, counts, err, latency_ms = self._execute_with_auto_downgrade(
             config=config,
-            system_prompt="You are a health-check responder. Reply ONLY with compact JSON.",
-            user_prompt='Return JSON: {"ok": true, "pong": "finz"}',
+            system_prompt="Reply briefly with OK.",
+            user_prompt="Reply OK",
             discover_first=True,
-            max_output_tokens=64,
+            max_output_tokens=512,
+            is_health_ping=True,
         )
         if ok:
             msg = f"Kết nối Gemini thành công với model {actual_model} ({latency_ms} ms)."
@@ -391,6 +462,7 @@ class GeminiAdapter(AIProviderAdapter):
             user_prompt=user_prompt,
             discover_first=False,
             max_output_tokens=4096,
+            is_health_ping=False,
         )
         return StructuredGenerationResult(
             ok=ok,
