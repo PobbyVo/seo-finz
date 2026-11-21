@@ -131,5 +131,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Forward-only safety policy: do not drop user data columns in SQLite
-    pass
+    raise RuntimeError(
+        "FINZ_UNSUPPORTED_DOWNGRADE: Forward-only SQLite migration 0002 cannot be downgraded in-place. "
+        "Restore a verified pre-migration SQLite backup from data/backups/ instead."
+    )

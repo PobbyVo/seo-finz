@@ -13,6 +13,11 @@ from app.ai.gateway import gateway
 from app.ai.prompts import CRITIC_POST_SYSTEM_PROMPT, build_critic_user_prompt
 from app.config import ensure_data_dirs, settings
 from app.db import get_db
+from app.domain import mapping_engine as mapping_engine_mod
+from app.domain.eligibility_policy import (
+    compute_batch_manifest_sha256,
+    compute_file_sha256_streaming,
+)
 from app.domain.quality_gates import evaluate_all_gates
 from app.domain.semrush_parser import (
     parse_semrush_rows,
@@ -266,6 +271,28 @@ def confirm_semrush_import(
     if not raw_path.exists():
         raise HTTPException(status_code=404, detail="File nguồn tạm đã bị xóa khỏi đĩa, vui lòng tải lại.")
 
+    # P1-D (I02): Stream-hash stored file BEFORE parsing/writing to detect tampering between preview & confirm!
+    try:
+        actual_sha, actual_size = compute_file_sha256_streaming(raw_path)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Không thể đọc tệp nguồn trên đĩa: {exc}")
+
+    if actual_sha.lower() != (upload.sha256 or "").strip().lower() or (
+        upload.size_bytes and actual_size != upload.size_bytes
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "UPLOAD_TAMPERED_BETWEEN_PREVIEW_AND_CONFIRM",
+                "reason": "Nội dung tệp nguồn trên đĩa đã thay đổi giữa bước Xem trước và Xác nhận import (SHA-256 không khớp).",
+                "impact": "Hệ thống từ chối ghi dữ liệu để bảo vệ tính toàn vẹn bằng chứng SEO.",
+                "solution": "Tải lại tệp gốc từ Semrush tại Bước 04 để tạo bản xem trước mới.",
+                "next_action": "Upload lại tệp gốc ở Bước 04.",
+                "cta_label": "Mở Bước 04",
+                "cta_href": "/steps/04-upload",
+            },
+        )
+
     rt = payload.report_type.upper().strip()
     if rt not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"Loại báo cáo không hợp lệ: {rt}")
@@ -278,11 +305,18 @@ def confirm_semrush_import(
             raise HTTPException(status_code=403, detail="Phiếu Yêu cầu Semrush không thuộc dự án này.")
 
     preview_meta = json.loads(upload.preview_meta_json or "{}")
-    fallback_kw = (
-        (payload.target_keyword or "").strip()
-        or (req.seed_keyword.strip() if req else "")
-        or str(preview_meta.get("target_keyword") or "").strip()
-    )
+    explicit_kw = (payload.target_keyword or "").strip() or str(preview_meta.get("target_keyword") or "").strip()
+    req_kw = req.seed_keyword.strip() if req else ""
+    fallback_kw = (payload.target_keyword or "").strip() or req_kw or str(preview_meta.get("target_keyword") or "").strip()
+
+    if payload.column_mapping.get("keyword"):
+        keyword_binding_source = "COLUMN"
+    elif req_kw and not (payload.target_keyword or "").strip():
+        keyword_binding_source = "RESEARCH_REQUEST"
+    elif explicit_kw:
+        keyword_binding_source = "EXPLICIT_INPUT"
+    else:
+        keyword_binding_source = "NONE"
 
     try:
         headers, data_rows, meta = read_tabular_file(
@@ -302,6 +336,14 @@ def confirm_semrush_import(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    max_seq = (
+        db.query(ResearchBatch.import_seq)
+        .filter(ResearchBatch.project_id == project.id)
+        .order_by(ResearchBatch.import_seq.desc())
+        .first()
+    )
+    next_seq = int((max_seq[0] if max_seq and max_seq[0] is not None else 0)) + 1
+
     batch = ResearchBatch(
         project_id=project.id,
         research_request_id=req.id if req else None,
@@ -314,6 +356,12 @@ def confirm_semrush_import(
         total_normalized_rows=parsed.total_normalized_rows,
         duplicate_rows_detected=parsed.duplicate_rows_detected,
         warnings_json=json.dumps(parsed.warnings, ensure_ascii=False),
+        import_seq=next_seq,
+        target_keyword=fallback_kw,
+        keyword_binding_source=keyword_binding_source,
+        source_file_sha256=actual_sha,
+        manifest_sha256=None,
+        integrity_status="UNVERIFIED",
         status="PROCESS_COMPLETED",
     )
     db.add(batch)
@@ -355,6 +403,11 @@ def confirm_semrush_import(
 
     db.flush()
 
+    # Compute complete tamper-evident manifest across ALL stored rows & upload SHA-256
+    manifest_sha = compute_batch_manifest_sha256(batch, actual_sha, evidence_objs)
+    batch.manifest_sha256 = manifest_sha
+    batch.integrity_status = "VERIFIED"
+
     for ev in evidence_objs:
         if not ev.is_duplicate and ev.keyword_normalized in source_kw_map:
             db.add(
@@ -372,17 +425,42 @@ def confirm_semrush_import(
     if req:
         req.status = "IMPORTED"
 
+    db.flush()
+
+    # P0-B: Transactional freshness reconciliation (atomic with import — rolls back cleanly on any failure!)
+    reconcile_summary = mapping_engine_mod.reconcile_project_freshness(
+        db,
+        project,
+        trigger_batch_id=batch.id,
+        create_approvals=True,
+    )
+
     db.add(
         ProjectEvent(
             project_id=project.id,
             level="SUCCESS",
             event_type="SEMRUSH_BATCH_IMPORTED",
             message=(
-                f"Đã xác nhận import batch {batch.id} ({rt}): "
+                f"Đã xác nhận import batch {batch.id} ({rt}, seq #{next_seq}): "
                 f"{parsed.total_raw_rows} dòng thô → {parsed.total_normalized_rows} dòng chuẩn hóa "
                 f"(phát hiện {parsed.duplicate_rows_detected} dòng trùng, không cộng dồn Volume)."
+                + (
+                    f" Cập nhật tự động {len(reconcile_summary['affected_mapping_ids'])} mapping, "
+                    f"{reconcile_summary['stale_briefs']} brief chuyển stale."
+                    if reconcile_summary["affected_mapping_ids"]
+                    else ""
+                )
             ),
-            details_json=json.dumps({"batch_id": batch.id, "warnings": parsed.warnings}, ensure_ascii=False),
+            details_json=json.dumps(
+                {
+                    "batch_id": batch.id,
+                    "manifest_sha256": manifest_sha[:16],
+                    "keyword_binding_source": keyword_binding_source,
+                    "reconciliation": reconcile_summary,
+                    "warnings": parsed.warnings,
+                },
+                ensure_ascii=False,
+            ),
         )
     )
     db.commit()
@@ -390,6 +468,10 @@ def confirm_semrush_import(
     return {
         "saved": True,
         "batch_id": batch.id,
+        "import_seq": next_seq,
+        "manifest_sha256": manifest_sha,
+        "integrity_status": "VERIFIED",
+        "keyword_binding_source": keyword_binding_source,
         "status": "PROCESS_COMPLETED",
         "quality_approved": False,  # Explicit invariant: upload != SEO approved
         "navigation_eligible": True,
@@ -398,6 +480,7 @@ def confirm_semrush_import(
         "total_normalized_rows": parsed.total_normalized_rows,
         "duplicate_rows_detected": parsed.duplicate_rows_detected,
         "warnings": parsed.warnings,
+        "reconciliation": reconcile_summary,
         "workflow": refresh_workflow_state(db, project),
     }
 
@@ -431,14 +514,20 @@ def get_project_evidence(
         .all()
     )
     gates = evaluate_all_gates(db, project)
+    f2_gate = next((g for g in gates["gates"] if g["gate_code"] == "F2"), None)
+    f2_batch_statuses = (f2_gate["details"].get("batch_statuses") or {}) if f2_gate else {}
 
     return {
         "batches": [
             {
                 "id": b.id,
+                "import_seq": getattr(b, "import_seq", 0),
                 "report_type": b.report_type,
                 "market": b.market,
                 "locale": b.locale,
+                "target_keyword": getattr(b, "target_keyword", ""),
+                "keyword_binding_source": getattr(b, "keyword_binding_source", "COLUMN"),
+                "integrity_status": f2_batch_statuses.get(b.id, getattr(b, "integrity_status", "UNVERIFIED")),
                 "total_raw_rows": b.total_raw_rows,
                 "total_normalized_rows": b.total_normalized_rows,
                 "duplicate_rows_detected": b.duplicate_rows_detected,

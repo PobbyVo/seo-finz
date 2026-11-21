@@ -150,7 +150,7 @@ export default function Step06MappingPage() {
               <strong className="text-sky-300">
                 {data.eligible_official_count ?? 0}/{data.mappings.length}
               </strong>{' '}
-              mapping (Policy v{data.policy_version || '1.6.1'}). Bằng chứng SERP của từ khóa A không tự động hợp thức hóa từ khóa B.
+              mapping (Policy v{data.policy_version || '1.6.2'}). Chỉ chứng nhận trên <strong>1 snapshot SERP thống nhất</strong> cho đúng từ khóa &amp; thị trường (không gộp nhiều batch).
             </p>
           </div>
 
@@ -236,6 +236,14 @@ export default function Step06MappingPage() {
                           {elig?.eligible_official ? 'ĐỦ ĐIỀU KIỆN' : 'CHƯA ĐỦ GATE'}
                         </strong>
                       </div>
+                      {elig?.serp_evidence?.selected_batch_id && (
+                        <div className="font-mono text-[10px] text-slate-500">
+                          Snapshot: {elig.serp_evidence.selected_batch_id}
+                          {elig.serp_evidence.snapshot_identity?.timestamp_kind
+                            ? ` (${elig.serp_evidence.snapshot_identity.timestamp_kind})`
+                            : ''}
+                        </div>
+                      )}
                     </td>
                     <td data-label="Điểm nghẽn" className="text-xs max-w-sm space-y-1.5">
                       {blockers.length === 0 ? (

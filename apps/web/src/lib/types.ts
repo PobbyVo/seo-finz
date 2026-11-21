@@ -211,6 +211,20 @@ export interface MappingEligibility {
   serp_tier: string;
   serp_status: string;
   top10_verified: boolean;
+  live_fingerprint?: string;
+  evidence_drifted?: boolean;
+  serp_evidence?: {
+    selected_batch_id?: string | null;
+    candidate_snapshots_count?: number;
+    conflicts_with_prior_snapshot?: boolean;
+    valid_organic_count?: number;
+    snapshot_identity?: {
+      batch_id?: string | null;
+      observed_at?: string | null;
+      timestamp_kind?: string;
+      keyword_binding_source?: string;
+    } | null;
+  };
   approval_state: string;
   blockers: StandardizedError[];
   warnings: Array<{ code: string; message: string }>;
@@ -301,6 +315,8 @@ export interface ContentBriefItem {
   mapping_revision?: number | null;
   mapping_fingerprint?: string | null;
   is_stale?: boolean;
+  stale_reasons?: string[];
+  recorded_brief_mode?: 'OFFICIAL' | 'DRAFT';
   eligibility_snapshot?: Record<string, unknown>;
   br_code: string;
   content_type: string;
@@ -334,4 +350,18 @@ export interface ContentBriefItem {
     title_variants?: string[];
   };
   version: number;
+}
+
+export interface ExportHistoryItem {
+  id: string;
+  export_format: string;
+  filename: string;
+  brief_mode: string;
+  recorded_brief_mode: string;
+  is_superseded: boolean;
+  freshness_status: 'CURRENT' | 'OUTDATED_SUPERSEDED';
+  superseded_reason: string;
+  created_at: string | null;
+  download_url: string;
+  historical_download_url: string;
 }

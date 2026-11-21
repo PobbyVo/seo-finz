@@ -265,17 +265,22 @@ def decide_approval(
                     "cta_href": "/steps/06-mapping",
                 },
             )
+        # Also verify against LIVE canonical evidence fingerprint so concurrent/post-import approval cannot bypass freshness!
+        live_ctx = load_project_policy_context(db, project)
+        live_dec = evaluate_mapping_eligibility(project, target_km, live_ctx)
+        live_fp = live_dec["live_fingerprint"]
+
         if (
             approval.target_revision is not None
             and target_km.revision != approval.target_revision
         ) or (
             approval.target_fingerprint is not None
-            and target_km.content_fingerprint != approval.target_fingerprint
+            and (target_km.content_fingerprint != approval.target_fingerprint or live_fp != approval.target_fingerprint)
         ):
             approval.status = "SUPERSEDED"
             approval.decision_note = (
                 f"Hết hiệu lực: yêu cầu cho rev #{approval.target_revision} "
-                f"nhưng Mapping đã lên rev #{target_km.revision}."
+                f"nhưng Mapping/bằng chứng hiện tại đã đổi sang rev #{target_km.revision}."
             )
             db.commit()
             raise HTTPException(
@@ -284,7 +289,7 @@ def decide_approval(
                     "code": "APPROVAL_REVISION_MISMATCH",
                     "reason": (
                         f"Yêu cầu phê duyệt cũ (rev #{approval.target_revision}) không còn khớp với "
-                        f"Mapping hiện tại (rev #{target_km.revision})."
+                        f"Mapping/bằng chứng hiện tại (rev #{target_km.revision})."
                     ),
                     "impact": "Không ghi thay đổi lên Mapping mới để tránh duyệt nhầm bằng chứng lỗi thời.",
                     "solution": "Tải lại Chờ phê duyệt và duyệt mục PENDING mới nhất khớp rev hiện hành.",

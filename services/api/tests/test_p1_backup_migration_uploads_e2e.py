@@ -435,9 +435,10 @@ def test_e2e_mock_7_step_reproducibility_and_zero_secret_leakage_in_exports(clie
             assert wb["Keyword Overview"].max_row == 16  # header + 15 rows
             assert wb["SEO Content Brief"].max_row >= 2
         elif fmt == "json":
+            from app.domain.eligibility_policy import POLICY_VERSION
             parsed = json.loads(exp.content.decode("utf-8"))
             assert parsed["contains_api_keys"] is False
-            assert parsed["policy_version"] == "1.6.1"
+            assert parsed["policy_version"] == POLICY_VERSION
 
     # Secret never persisted in SQLite bytes
     assert secret_aq.encode("utf-8") not in db_file.read_bytes()

@@ -4,6 +4,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.domain.eligibility_policy import compute_effective_brief_freshness
 from app.domain.quality_gates import evaluate_all_gates
 from app.models import (
     Approval,
@@ -219,9 +220,21 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[6].status = "NOT_STARTED"
         step_map[6].summary = ""
 
-    # Step 7
-    official_fresh_briefs = [b for b in briefs if b.brief_mode == "OFFICIAL" and not b.is_stale]
-    stale_briefs = [b for b in briefs if b.is_stale]
+    # Step 7 (live freshness projection, not merely persisted columns!)
+    mappings_by_id = {m.id: m for m in mappings}
+    brief_freshness = [
+        (
+            b,
+            compute_effective_brief_freshness(
+                b,
+                mappings_by_id.get(b.keyword_mapping_id) if b.keyword_mapping_id else None,
+                elig_map.get(b.keyword_mapping_id) if b.keyword_mapping_id else None,
+            ),
+        )
+        for b in briefs
+    ]
+    official_fresh_briefs = [b for b, f in brief_freshness if f["effective_brief_mode"] == "OFFICIAL" and not f["effective_is_stale"]]
+    stale_briefs = [b for b, f in brief_freshness if f["effective_is_stale"]]
     if official_fresh_briefs and not stale_briefs:
         step_map[7].status = "QUALITY_APPROVED"
         step_map[7].summary = f"{len(official_fresh_briefs)} Content Brief CHÍNH THỨC sẵn sàng xuất."

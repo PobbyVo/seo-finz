@@ -40,6 +40,11 @@ const STATUS_META: Record<string, { label: string; cls: string }> = {
   DRAFT: { label: 'DỰ THẢO', cls: 'bg-amber-500/20 text-amber-200 border-amber-400/40' },
   IMPORTED: { label: 'Đã nhập SQLite', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35' },
   MAPPING_REQUIRED: { label: 'Cần ghép cột', cls: 'bg-sky-500/15 text-sky-300 border-sky-500/35' },
+  VERIFIED: { label: 'Toàn vẹn (VERIFIED)', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35' },
+  UNVERIFIED: { label: 'Chưa xác minh manifest', cls: 'bg-amber-500/20 text-amber-200 border-amber-400/40' },
+  CURRENT: { label: 'Hiện hành (CURRENT)', cls: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/35' },
+  OUTDATED_SUPERSEDED: { label: 'Bản cũ · Đã thay thế', cls: 'bg-rose-500/20 text-rose-200 border-rose-400/40' },
+  HISTORICAL_SUPERSEDED: { label: 'Lịch sử · Hết hiệu lực', cls: 'bg-rose-500/20 text-rose-200 border-rose-400/40' },
 };
 
 export function StatusBadge({ status, className = '' }: { status: string; className?: string }) {

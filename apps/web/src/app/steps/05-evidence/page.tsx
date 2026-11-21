@@ -20,9 +20,13 @@ import { ResponsiveTable } from '@/components/ResponsiveTable';
 interface EvidencePayload {
   batches: Array<{
     id: string;
+    import_seq?: number;
     report_type: string;
     market: string;
     locale: string;
+    target_keyword?: string;
+    keyword_binding_source?: string;
+    integrity_status?: string;
     total_raw_rows: number;
     total_normalized_rows: number;
     duplicate_rows_detected: number;
@@ -244,6 +248,36 @@ export default function Step05EvidencePage() {
             <div className="mt-1 text-[11px] text-slate-500">Không lọc bỏ bởi ngưỡng cứng</div>
           </div>
         </div>
+      )}
+
+      {/* Imported Batches Integrity Panel */}
+      {data && data.batches.length > 0 && (
+        <section className="rounded-2xl border border-slate-800 bg-surface-900 p-4 space-y-2.5">
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+            Lịch sử Batch & Toàn vẹn nguồn (F2 Manifest)
+          </div>
+          <div className="grid gap-2.5 md:grid-cols-2">
+            {data.batches.map((b) => (
+              <div key={b.id} className="rounded-xl border border-slate-800 bg-surface-850 p-3 text-xs space-y-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="font-mono font-semibold text-sky-300">
+                    {b.id} {b.import_seq ? `(seq #${b.import_seq})` : ''}
+                  </span>
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <StatusBadge status={b.integrity_status || 'UNVERIFIED'} />
+                    <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[11px] text-slate-300">
+                      {b.report_type} · {b.market}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-[11px] text-slate-400">
+                  Dòng thô: {b.total_raw_rows} · Chuẩn hóa: {b.total_normalized_rows} · Trùng: {b.duplicate_rows_detected}
+                  {b.keyword_binding_source ? ` · Ràng buộc KW: ${b.keyword_binding_source}` : ''}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {/* Post-Semrush Critic Results */}

@@ -305,6 +305,14 @@ class ResearchBatch(Base):
     duplicate_rows_detected: Mapped[int] = mapped_column(Integer, default=0)
     warnings_json: Mapped[str] = mapped_column(Text, default="[]")
     source_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    # V1.6.2 coherent snapshot & F2 tamper-evident manifest provenance
+    import_seq: Mapped[int] = mapped_column(Integer, default=0)
+    target_keyword: Mapped[str] = mapped_column(String(300), default="")
+    keyword_binding_source: Mapped[str] = mapped_column(String(40), default="COLUMN")  # COLUMN|RESEARCH_REQUEST|EXPLICIT_INPUT|NONE
+    source_observation_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    source_file_sha256: Mapped[str] = mapped_column(String(64), default="")
+    manifest_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    integrity_status: Mapped[str] = mapped_column(String(32), default="UNVERIFIED")  # VERIFIED|UNVERIFIED|FAILED
     status: Mapped[str] = mapped_column(String(40), default="PROCESS_COMPLETED")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -511,6 +519,11 @@ class ExportRecord(Base):
     filename: Mapped[str] = mapped_column(String(255))
     stored_path: Mapped[str] = mapped_column(String(500))
     brief_mode: Mapped[str] = mapped_column(String(24), default="DRAFT")
+    # V1.6.2 historical export provenance & freshness tracking
+    evidence_state_hash: Mapped[str] = mapped_column(String(64), default="")
+    brief_fingerprints_json: Mapped[str] = mapped_column(Text, default="{}")
+    is_superseded: Mapped[bool] = mapped_column(Boolean, default=False)
+    superseded_reason: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 

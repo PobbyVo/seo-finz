@@ -217,19 +217,38 @@ def evaluate_all_gates(db: Session, project: Project) -> dict[str, Any]:
         ],
     })
 
-    # --- F2: Import integrity (verified per batch, NOT mere existence!) ---
+    # --- F2: Full tamper-evident import integrity (VERIFIED / UNVERIFIED / FAILED per batch) ---
+    batch_integrity_by_id = ctx.get("batch_integrity_by_id") or {}
+    batch_statuses: dict[str, str] = {}
     if not batches:
         f2_status = "NOT_STARTED"
         f2_issues: list[str] = []
     else:
         f2_issues = []
+        any_failed = False
+        any_unverified = False
         for b in batches:
-            ok_b, issues_b = verify_batch_integrity(b, uploads_by_id, evidence_rows)
-            if not ok_b:
-                f2_issues.extend(issues_b)
-        f2_status = "FAILED" if f2_issues else "PASSED"
+            b_int = batch_integrity_by_id.get(b.id)
+            if b_int is None:
+                ok_b, issues_b = verify_batch_integrity(b, uploads_by_id, evidence_rows)
+                b_stat = "VERIFIED" if ok_b else "FAILED"
+                b_int = {"status": b_stat, "ok": ok_b, "issues": issues_b}
+            batch_statuses[b.id] = b_int["status"]
+            if b_int["status"] == "FAILED":
+                any_failed = True
+                f2_issues.extend(b_int["issues"])
+            elif b_int["status"] == "UNVERIFIED":
+                any_unverified = True
+                f2_issues.extend(b_int["issues"])
+        if any_failed:
+            f2_status = "FAILED"
+        elif any_unverified:
+            f2_status = "WARNING"
+        else:
+            f2_status = "PASSED"
     _upsert_gate(db, project.id, "F2", GATE_DEFINITIONS[5][1], f2_status, {
         "batches_count": len(batches),
+        "batch_statuses": batch_statuses,
         "integrity_issues": f2_issues,
         "duplicate_rows_preserved_without_summing": len(dup_rows),
         "total_raw_rows": sum(b.total_raw_rows for b in batches),
@@ -305,7 +324,14 @@ def evaluate_all_gates(db: Session, project: Project) -> dict[str, Any]:
     else:
         # Before mappings exist, evaluate SERP against primary keyword only (never project-wide illusion)
         pk = project.primary_keyword_current or project.primary_keyword_original
-        pk_serp = evaluate_serp_for_keyword(project, pk, organic_rows, ctx["batches_by_id"], uploads_by_id) if pk else None
+        pk_serp = (
+            evaluate_serp_for_keyword(
+                project, pk, organic_rows, ctx["batches_by_id"], uploads_by_id,
+                batch_integrity_by_id=batch_integrity_by_id,
+            )
+            if pk
+            else None
+        )
         if pk_serp and pk_serp["serp_sufficient"]:
             f5_status = "PASSED"
             project_serp_status = pk_serp["serp_tier"]
@@ -364,7 +390,7 @@ def evaluate_all_gates(db: Session, project: Project) -> dict[str, Any]:
     else:
         failed_briefs = [bc for bc in brief_checks if not bc["passed"]]
         stale_briefs = [bc for bc in brief_checks if bc["is_stale"]]
-        official_briefs = [b for b in briefs if b.brief_mode == "OFFICIAL" and not b.is_stale]
+        official_briefs = [bc for bc in brief_checks if bc["brief_mode"] == "OFFICIAL" and not bc["is_stale"]]
         if failed_briefs:
             f7_status = "FAILED"
         elif stale_briefs or not official_briefs:
@@ -374,9 +400,9 @@ def evaluate_all_gates(db: Session, project: Project) -> dict[str, Any]:
     _upsert_gate(db, project.id, "F7", GATE_DEFINITIONS[10][1], f7_status, {
         "phase": "POST_GENERATION",
         "briefs_count": len(briefs),
-        "official_briefs": len([b for b in briefs if b.brief_mode == "OFFICIAL" and not b.is_stale]),
-        "draft_briefs": len([b for b in briefs if b.brief_mode != "OFFICIAL"]),
-        "stale_briefs": len([b for b in briefs if b.is_stale]),
+        "official_briefs": len([bc for bc in brief_checks if bc["brief_mode"] == "OFFICIAL" and not bc["is_stale"]]),
+        "draft_briefs": len([bc for bc in brief_checks if bc["brief_mode"] != "OFFICIAL"]),
+        "stale_briefs": len([bc for bc in brief_checks if bc["is_stale"]]),
         "checks": brief_checks,
     })
 

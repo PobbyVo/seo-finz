@@ -197,7 +197,9 @@ def generate_content_briefs(
             "serp_tier": dec["serp_tier"],
             "top10_verified": dec["top10_verified"],
             "valid_organic_urls": serp_ev["valid_organic_count"],
+            "selected_serp_batch_id": serp_ev.get("selected_batch_id"),
             "serp_batch_ids": serp_ev["batch_ids"],
+            "snapshot_identity": serp_ev.get("snapshot_identity"),
             "market": project.market,
             "policy_version": POLICY_VERSION,
         }
@@ -309,7 +311,7 @@ def generate_content_briefs(
 
         brief.keyword_mapping_id = km.id
         brief.mapping_revision = km.revision
-        brief.mapping_fingerprint = km.content_fingerprint
+        brief.mapping_fingerprint = dec.get("live_fingerprint") or km.content_fingerprint
         brief.is_stale = False
         brief.eligibility_snapshot_json = json.dumps(
             {
@@ -374,20 +376,26 @@ def generate_content_briefs(
     }
 
 
-def serialize_brief(b: ContentBrief) -> dict[str, Any]:
+def serialize_brief(b: ContentBrief, *, freshness: dict[str, Any] | None = None) -> dict[str, Any]:
+    eff_stale = freshness["effective_is_stale"] if freshness is not None else bool(b.is_stale)
+    eff_mode = freshness["effective_brief_mode"] if freshness is not None else b.brief_mode
+    eff_status = freshness["effective_status"] if freshness is not None else b.status
+    stale_reasons = freshness["stale_reasons"] if freshness is not None else ([] if not b.is_stale else ["Brief đã cũ do thay đổi Mapping hoặc bằng chứng."])
     return {
         "id": b.id,
         "project_id": b.project_id,
         "keyword_mapping_id": b.keyword_mapping_id,
         "mapping_revision": b.mapping_revision,
         "mapping_fingerprint": b.mapping_fingerprint,
-        "is_stale": bool(b.is_stale),
+        "is_stale": bool(eff_stale),
+        "stale_reasons": stale_reasons,
+        "recorded_brief_mode": b.brief_mode,
         "eligibility_snapshot": json.loads(b.eligibility_snapshot_json or "{}"),
         "br_code": b.br_code,
         "content_type": b.content_type,
         "priority": b.priority,
-        "brief_mode": b.brief_mode,
-        "status": b.status,
+        "brief_mode": eff_mode,
+        "status": eff_status,
         "primary_keyword": b.primary_keyword,
         "secondary_keywords": json.loads(b.secondary_keywords_json or "[]"),
         "metrics": json.loads(b.metrics_json or "{}"),

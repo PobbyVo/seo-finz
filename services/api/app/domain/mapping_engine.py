@@ -10,9 +10,11 @@ from sqlalchemy.orm import Session
 from app.domain.eligibility_policy import (
     POLICY_VERSION,
     compute_mapping_fingerprint,
+    compute_metrics_evidence_hash,
     evaluate_mapping_eligibility,
     evaluate_serp_for_keyword,
     load_project_policy_context,
+    select_effective_metrics_row,
 )
 from app.domain.taxonomy_parser import normalize_text
 from app.models import (
@@ -21,6 +23,7 @@ from app.models import (
     ContentBrief,
     DemandGroup,
     EvidenceRow,
+    ExportRecord,
     KeywordMapping,
     MappingRevision,
     Project,
@@ -67,18 +70,323 @@ def _record_mapping_revision(db: Session, km: KeywordMapping) -> None:
     )
 
 
+def _propose_url(page_type: str, primary_kw: str) -> str:
+    url_prefix = {
+        "ARTICLE": "/blog/",
+        "TOOL": "/cong-cu/",
+        "DOWNLOAD": "/tai-nguyen/",
+        "SERVICE": "/dich-vu/",
+        "PRODUCT": "/san-pham/",
+    }.get(page_type, "/noi-dung/")
+    return f"{url_prefix}{slugify_vi(primary_kw)}"
+
+
+def _ensure_pending_approval_for_mapping(
+    db: Session,
+    project: Project,
+    km: KeywordMapping,
+    *,
+    coverage_type: str,
+    serp_eval: dict[str, Any],
+    material_changed: bool,
+    reason_suffix: str = "",
+) -> bool:
+    """Create exact ONE PENDING approval for `(km.id, km.revision, km.content_fingerprint)` if needed."""
+    has_current_decision = (
+        db.query(Approval)
+        .filter(
+            Approval.project_id == project.id,
+            Approval.target_ref == km.id,
+            Approval.scope == "BRIEF_ELIGIBILITY",
+            Approval.target_revision == km.revision,
+            Approval.target_fingerprint == km.content_fingerprint,
+            Approval.status.in_(["PENDING", "APPROVED"]),
+        )
+        .first()
+    )
+    if km.is_approved or has_current_decision:
+        return False
+
+    orig_pk = project.primary_keyword_original or ""
+    is_new_topic = coverage_type == "GAP"
+    is_overlap = coverage_type == "OVERLAP"
+    apr_type = (
+        "OVERLAP_MERGE_SPLIT"
+        if is_overlap
+        else ("NEW_TOPIC_PROPOSAL" if is_new_topic else "FINAL_MAPPING")
+    )
+    reapproval_tag = f" [CẦN DUYỆT LẠI{reason_suffix}]" if (material_changed and km.revision > 1) else ""
+    serp_sufficient = bool(serp_eval.get("serp_sufficient"))
+    serp_tier = serp_eval.get("serp_tier", "SERP_NOT_VERIFIED")
+
+    db.add(
+        Approval(
+            project_id=project.id,
+            approval_type=apr_type,
+            target_ref=km.id,
+            target_revision=km.revision,
+            target_fingerprint=km.content_fingerprint,
+            title=f"Phê duyệt Mapping rev #{km.revision} ({km.page_type}): {km.primary_keyword}{reapproval_tag}",
+            original_value=orig_pk or "(chưa có mapping trước đó)",
+            proposed_value=f"{km.page_type} | {km.primary_keyword} -> {km.proposed_url} (fp:{km.content_fingerprint[:10]})",
+            rationale=km.merge_split_proposal,
+            evidence_json=km.evidence_json,
+            impact=(
+                f"Phê duyệt đúng phiên bản rev #{km.revision} cho '{km.primary_keyword}'. "
+                + (
+                    "Đủ điều kiện xem xét xuất Brief chính thức sau khi hoàn tất tất cả Quality Gates."
+                    if serp_sufficient
+                    else f"Lưu ý: hiện tại là {serp_tier}, vẫn cần bổ sung SERP trước khi xuất Brief chính thức."
+                )
+            ),
+            scope="BRIEF_ELIGIBILITY",
+            status="PENDING",
+            version=km.revision,
+        )
+    )
+    return True
+
+
+def _invalidate_linked_briefs_and_exports(
+    db: Session,
+    project: Project,
+    km: KeywordMapping,
+    *,
+    reason: str,
+) -> tuple[int, int]:
+    """
+    Mark linked ContentBriefs stale & downgrade OFFICIAL -> DRAFT (preserving IDs & BriefVersion history),
+    and tag historical ExportRecords referencing this mapping/brief as superseded (preserving original files!).
+    """
+    stale_briefs_count = 0
+    superseded_exports_count = 0
+
+    linked_briefs = (
+        db.query(ContentBrief)
+        .filter(
+            ContentBrief.project_id == project.id,
+            ContentBrief.keyword_mapping_id == km.id,
+        )
+        .all()
+    )
+    affected_brief_ids: set[str] = set()
+    for lb in linked_briefs:
+        if lb.mapping_fingerprint != km.content_fingerprint or lb.mapping_revision != km.revision:
+            affected_brief_ids.add(lb.id)
+            if not lb.is_stale or lb.brief_mode == "OFFICIAL" or lb.status != "STALE_NEEDS_REGENERATION":
+                lb.is_stale = True
+                if lb.brief_mode == "OFFICIAL":
+                    lb.brief_mode = "DRAFT"
+                lb.status = "STALE_NEEDS_REGENERATION"
+                stale_briefs_count += 1
+
+    # Mark affected historical ExportRecords as superseded without altering original files on disk!
+    exports = (
+        db.query(ExportRecord)
+        .filter(ExportRecord.project_id == project.id, ExportRecord.is_superseded == False)  # noqa: E712
+        .all()
+    )
+    for exp in exports:
+        bf_map = json.loads(getattr(exp, "brief_fingerprints_json", "{}") or "{}")
+        mentions_mapping = any(
+            (meta.get("mapping_id") == km.id or bid in affected_brief_ids)
+            for bid, meta in bf_map.items()
+            if isinstance(meta, dict)
+        )
+        # Also supersede legacy OFFICIAL exports lacking brief_fingerprints_json when any mapping changes
+        if mentions_mapping or (exp.brief_mode == "OFFICIAL" and not bf_map):
+            exp.is_superseded = True
+            exp.superseded_reason = reason
+            superseded_exports_count += 1
+
+    return stale_briefs_count, superseded_exports_count
+
+
+def reconcile_project_freshness(
+    db: Session,
+    project: Project,
+    *,
+    trigger_batch_id: str | None = None,
+    create_approvals: bool = True,
+) -> dict[str, Any]:
+    """
+    Transactional, idempotent import-time freshness reconciler (runs BEFORE caller's db.commit()!).
+    - Re-evaluates every active KeywordMapping against the latest coherent metrics & SERP snapshots.
+    - When semantic evidence changes for mapping M:
+      * Increments M.revision, updates M.content_fingerprint & metrics/SERP summary, records MappingRevision.
+      * Revokes M.is_approved (preserving approved_revision/approved_fingerprint audit trail!).
+      * Marks old PENDING approvals for M as SUPERSEDED and opens ONE fresh PENDING approval for new rev.
+      * Marks linked ContentBriefs stale & downgrades OFFICIAL -> DRAFT (preserving BriefVersion history).
+      * Marks affected historical ExportRecords `is_superseded=True` (preserving original immutable files).
+    - When semantic evidence for mapping M is UNCHANGED (e.g. unrelated keyword import or identical file re-import):
+      * Leaves M, its approval, its revision, and its OFFICIAL brief 100% untouched!
+    """
+    active_mappings = (
+        db.query(KeywordMapping)
+        .filter(KeywordMapping.project_id == project.id, KeywordMapping.is_archived == False)  # noqa: E712
+        .order_by(KeywordMapping.priority.asc(), KeywordMapping.created_at.asc())
+        .all()
+    )
+    if not active_mappings:
+        return {
+            "affected_mapping_ids": [],
+            "invalidated_approvals": 0,
+            "new_pending_approvals": 0,
+            "stale_briefs": 0,
+            "superseded_exports": 0,
+        }
+
+    ctx = load_project_policy_context(db, project)
+    proj_market = (project.market or "VN").upper()
+    evidence_rows: list[EvidenceRow] = ctx["evidence_rows"]
+    batches_by_id = ctx["batches_by_id"]
+    uploads_by_id = ctx["uploads_by_id"]
+    batch_integrity_by_id = ctx["batch_integrity_by_id"]
+    demand_groups_by_id = ctx["demand_groups_by_id"]
+    organic_rows = [r for r in evidence_rows if r.row_type == "ORGANIC_RESULTS"]
+
+    affected_ids: list[str] = []
+    superseded_approvals_count = 0
+    new_approvals_count = 0
+    stale_briefs_count = 0
+    superseded_exports_count = 0
+
+    for km in active_mappings:
+        dg = demand_groups_by_id.get(km.demand_group_id) if km.demand_group_id else None
+        m_row, m_batch, _all_m = select_effective_metrics_row(project, km.primary_keyword, evidence_rows, batches_by_id)
+        metrics_hash = compute_metrics_evidence_hash(m_row, m_batch, proj_market)
+        serp_eval = evaluate_serp_for_keyword(
+            project,
+            km.primary_keyword,
+            organic_rows,
+            batches_by_id,
+            uploads_by_id,
+            batch_integrity_by_id=batch_integrity_by_id,
+        )
+
+        # Keep base page_type unless latest valid SERP snapshot explicitly indicates a dominant type
+        base_page_type = (dg.assumed_page_type or "ARTICLE").upper() if dg else (km.page_type or "ARTICLE").upper()
+        new_page_type = base_page_type
+        if serp_eval["serp_sufficient"] and serp_eval["dominant_page_type_hypothesis"] in {"ARTICLE", "TOOL", "DOWNLOAD", "SERVICE", "PRODUCT"}:
+            new_page_type = serp_eval["dominant_page_type_hypothesis"]
+        new_url = _propose_url(new_page_type, km.primary_keyword) if new_page_type != km.page_type else km.proposed_url
+        new_effort = "HIGH" if new_page_type in ("TOOL", "PRODUCT") else ("LOW" if new_page_type == "DOWNLOAD" else "MEDIUM")
+
+        secondary_kws = json.loads(km.secondary_keywords_json or "[]")
+        live_fp = compute_mapping_fingerprint(
+            primary_keyword=km.primary_keyword,
+            secondary_keywords=secondary_kws,
+            demand_group_id=km.demand_group_id,
+            proposed_url=new_url,
+            page_type=new_page_type,
+            market=proj_market,
+            metrics_evidence_hash=metrics_hash,
+            serp_evidence_hash=serp_eval["serp_evidence_hash"],
+            priority=km.priority,
+            business_value=km.business_value,
+            effort=new_effort,
+        )
+
+        if live_fp == km.content_fingerprint:
+            # Semantically identical -> idempotent no-op (zero approval churn!)
+            continue
+
+        affected_ids.append(km.id)
+        km.revision = (km.revision or 0) + 1
+        km.content_fingerprint = live_fp
+        km.page_type = new_page_type
+        km.proposed_url = new_url
+        km.effort = new_effort
+        km.volume = m_row.volume if m_row else None
+        km.kd = m_row.kd if m_row else None
+        km.intent = m_row.intent if m_row else None
+        km.metrics_source = f"Semrush Batch {m_row.batch_id}" if m_row else "Chưa có dữ liệu Semrush"
+        km.metrics_evidence_id = m_row.id if m_row else None
+        km.serp_status = serp_eval["serp_tier"]
+        km.serp_evidence_summary_json = json.dumps(serp_eval, ensure_ascii=False)
+        km.is_approved = False
+
+        ev_list = list(json.loads(dg.supporting_evidence_json or "[]")) if dg else [f"Từ dữ liệu nguồn dự án {project.code}."]
+        if m_row:
+            ev_list.append(
+                f"Semrush batch {m_row.batch_id} ({proj_market}): Volume={m_row.volume if m_row.volume is not None else 'thiếu'}, "
+                f"KD={m_row.kd if m_row.kd is not None else 'thiếu'}, Intent={m_row.intent or 'thiếu'}."
+            )
+        ev_list.append(serp_eval["sufficiency_reason"])
+        if serp_eval["sample_urls"]:
+            ev_list.append(f"URL organic mẫu ({serp_eval['serp_tier']}): {serp_eval['sample_urls'][0]}")
+        km.evidence_json = json.dumps(ev_list, ensure_ascii=False)
+
+        db.flush()
+        _record_mapping_revision(db, km)
+
+        # Mark old PENDING approvals for this mapping as SUPERSEDED (preserving past APPROVED rows as audit history!)
+        old_pendings = (
+            db.query(Approval)
+            .filter(
+                Approval.project_id == project.id,
+                Approval.target_ref == km.id,
+                Approval.status == "PENDING",
+            )
+            .all()
+        )
+        for oa in old_pendings:
+            oa.status = "SUPERSEDED"
+            oa.decision_note = (
+                f"Hết hiệu lực do bằng chứng mới (batch {trigger_batch_id or 'import'}) cập nhật Mapping sang rev #{km.revision}."
+            )
+            superseded_approvals_count += 1
+
+        if create_approvals:
+            created_apr = _ensure_pending_approval_for_mapping(
+                db,
+                project,
+                km,
+                coverage_type=dg.coverage_type if dg else "COVERED",
+                serp_eval=serp_eval,
+                material_changed=True,
+                reason_suffix=" — BẰNG CHỨNG MỚI",
+            )
+            if created_apr:
+                new_approvals_count += 1
+
+        stale_reason = (
+            f"Bằng chứng cho '{km.primary_keyword}' thay đổi bởi batch {trigger_batch_id or 'import'} (rev #{km.revision})."
+        )
+        sb, se = _invalidate_linked_briefs_and_exports(db, project, km, reason=stale_reason)
+        stale_briefs_count += sb
+        superseded_exports_count += se
+
+    if affected_ids:
+        db.flush()
+        fresh_ctx = load_project_policy_context(db, project)
+        opps_by_km = {
+            o.keyword_mapping_id: o
+            for o in db.query(ArticleOpportunity).filter(ArticleOpportunity.project_id == project.id).all()
+            if o.keyword_mapping_id
+        }
+        for km in active_mappings:
+            if km.id in affected_ids:
+                dec = evaluate_mapping_eligibility(project, km, fresh_ctx)
+                km.content_status = dec["recommended_content_status"]
+                if km.id in opps_by_km:
+                    opps_by_km[km.id].status = km.content_status
+                    opps_by_km[km.id].page_type = km.page_type
+        db.flush()
+
+    return {
+        "affected_mapping_ids": affected_ids,
+        "invalidated_approvals": superseded_approvals_count,
+        "new_pending_approvals": new_approvals_count,
+        "stale_briefs": stale_briefs_count,
+        "superseded_exports": superseded_exports_count,
+    }
+
+
 def build_keyword_mapping_preview(db: Session, project: Project, *, create_approvals: bool = True) -> dict[str, Any]:
     """
     Non-destructive, idempotent Keyword Mapping & Article Opportunities builder.
-    Invariants enforced:
-    - NEVER mass-deletes existing KeywordMapping rows (preserves stable IDs, FK references,
-      ContentBrief lineage, and Approval audit history).
-    - Exact-keyword, exact-market metrics & SERP provenance (NEVER leaks keyword A's SERP to keyword B).
-    - Canonical content_fingerprint binds approvals to exact mapping state & evidence.
-    - Material change increments revision, invalidates old approval, marks old PENDING approvals
-      as SUPERSEDED, creates ONE fresh PENDING approval, and flags outdated OFFICIAL briefs stale!
-    - Idempotent rerun with unchanged inputs creates ZERO duplicate approvals and keeps stable IDs/revisions.
-    - TOOL / DOWNLOAD / SERVICE / PRODUCT never count toward the soft 5-7 ARTICLE quota.
+    Consumes the EXACT same single-snapshot SERP & semantic metrics fingerprint policy as `eligibility_policy.py`.
     """
     ctx = load_project_policy_context(db, project)
     proj_market = (project.market or "VN").upper()
@@ -92,16 +400,9 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
     evidence_rows: list[EvidenceRow] = ctx["evidence_rows"]
     batches_by_id = ctx["batches_by_id"]
     uploads_by_id = ctx["uploads_by_id"]
-
-    # Exact-market, non-duplicate metrics indexed by normalized keyword
-    metrics_by_kw: dict[str, EvidenceRow] = {}
-    for r in evidence_rows:
-        if r.row_type == "METRICS" and not r.is_duplicate and (r.market or proj_market).upper() == proj_market:
-            metrics_by_kw[r.keyword_normalized] = r
-
+    batch_integrity_by_id = ctx["batch_integrity_by_id"]
     organic_rows = [r for r in evidence_rows if r.row_type == "ORGANIC_RESULTS"]
 
-    # Load existing mappings cleanly (NEVER mass delete!)
     existing_mappings = (
         db.query(KeywordMapping)
         .filter(KeywordMapping.project_id == project.id)
@@ -158,7 +459,7 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
     non_article_count = 0
     gap_count = 0
 
-    # Rebuild derived opportunities view non-destructively after mappings are updated
+    # Rebuild derived opportunities view cleanly (KeywordMapping & BriefVersion history are NEVER deleted)
     db.query(ArticleOpportunity).filter(ArticleOpportunity.project_id == project.id).delete()
 
     for idx, unit in enumerate(source_units):
@@ -171,11 +472,18 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         pk_norm = normalize_text(primary_kw)
         secondary_kws = [k for k in (seeds[1:] + related) if normalize_text(k) != pk_norm]
 
-        # STRICT exact primary keyword metrics in matching market (NEVER silently borrow keyword B's metrics!)
-        m_row = metrics_by_kw.get(pk_norm)
+        # Deterministic exact-keyword, exact-market metrics & single-snapshot SERP evaluation
+        m_row, m_batch, _all_m = select_effective_metrics_row(project, primary_kw, evidence_rows, batches_by_id)
+        metrics_hash = compute_metrics_evidence_hash(m_row, m_batch, proj_market)
 
-        # STRICT per-keyword, per-market SERP provenance (NEVER fallback to project-global SERP!)
-        serp_eval = evaluate_serp_for_keyword(project, primary_kw, organic_rows, batches_by_id, uploads_by_id)
+        serp_eval = evaluate_serp_for_keyword(
+            project,
+            primary_kw,
+            organic_rows,
+            batches_by_id,
+            uploads_by_id,
+            batch_integrity_by_id=batch_integrity_by_id,
+        )
         serp_sufficient = serp_eval["serp_sufficient"]
         serp_tier = serp_eval["serp_tier"]
 
@@ -210,21 +518,14 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         elif not serp_sufficient:
             merge_split = (
                 f"ĐỀ XUẤT DỰ THẢO ({serp_tier}): {serp_eval['sufficiency_reason']} "
-                "Cần bằng chứng ORGANIC_RESULTS cho đúng từ khóa này trước khi chốt tách bài."
+                "Cần bằng chứng ORGANIC_RESULTS trong 1 snapshot thống nhất cho đúng từ khóa này trước khi chốt tách bài."
             )
         else:
             merge_split = (
                 f"{serp_eval['sufficiency_reason']} Đề xuất giữ trang riêng dạng {page_type} và chờ người dùng phê duyệt."
             )
 
-        url_prefix = {
-            "ARTICLE": "/blog/",
-            "TOOL": "/cong-cu/",
-            "DOWNLOAD": "/tai-nguyen/",
-            "SERVICE": "/dich-vu/",
-            "PRODUCT": "/san-pham/",
-        }.get(page_type, "/noi-dung/")
-        proposed_url = f"{url_prefix}{slugify_vi(primary_kw)}"
+        proposed_url = _propose_url(page_type, primary_kw)
 
         ev_list = list(unit["evidence"])
         if m_row:
@@ -245,17 +546,14 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
             proposed_url=proposed_url,
             page_type=page_type,
             market=proj_market,
-            metrics_evidence_id=m_row.id if m_row else None,
-            metrics_batch_id=m_row.batch_id if m_row else None,
+            metrics_evidence_hash=metrics_hash,
             serp_evidence_hash=serp_eval["serp_evidence_hash"],
             priority=priority,
             business_value=biz_val,
             effort=effort,
-            merge_split_proposal=merge_split,
         )
 
         existing = by_logical_key.get(lkey)
-        # Fallback match by normalized primary keyword for pre-0002 legacy rows missing logical_key
         if existing is None:
             existing = next(
                 (em for em in existing_mappings if not em.is_archived and normalize_text(em.primary_keyword) == pk_norm),
@@ -302,7 +600,6 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
             km.is_archived = False
             km.logical_key = lkey
             if km.content_fingerprint != new_fp:
-                # Material change -> increment revision, invalidate stale approval & mark outdated briefs stale!
                 material_changed = True
                 km.revision = (km.revision or 0) + 1
                 km.content_fingerprint = new_fp
@@ -323,12 +620,10 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
                 km.serp_status = serp_tier
                 km.serp_evidence_summary_json = json.dumps(serp_eval, ensure_ascii=False)
                 km.evidence_json = json.dumps(ev_list, ensure_ascii=False)
-                # Invalidate old approval explicitly (preserving approved_fingerprint audit column if any)
                 km.is_approved = False
                 db.flush()
                 _record_mapping_revision(db, km)
 
-                # Mark any older PENDING approvals for this mapping as SUPERSEDED
                 old_pendings = (
                     db.query(Approval)
                     .filter(
@@ -343,81 +638,27 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
                     oa.decision_note = f"Hết hiệu lực do Mapping cập nhật sang rev #{km.revision}."
                     superseded_approvals_count += 1
 
-                # Mark existing ContentBriefs tied to this mapping as STALE & downgrade OFFICIAL -> DRAFT!
-                linked_briefs = (
-                    db.query(ContentBrief)
-                    .filter(
-                        ContentBrief.project_id == project.id,
-                        ContentBrief.keyword_mapping_id == km.id,
-                    )
-                    .all()
+                sb, _se = _invalidate_linked_briefs_and_exports(
+                    db, project, km, reason=f"Keyword Mapping '{km.primary_keyword}' cập nhật sang rev #{km.revision}."
                 )
-                for lb in linked_briefs:
-                    if lb.mapping_fingerprint != km.content_fingerprint:
-                        lb.is_stale = True
-                        if lb.brief_mode == "OFFICIAL":
-                            lb.brief_mode = "DRAFT"
-                        lb.status = "STALE_NEEDS_REGENERATION"
-                        stale_briefs_count += 1
+                stale_briefs_count += sb
             else:
-                # Idempotent: keep ID, revision, approval intact; refresh non-material display diagnostics only
                 km.serp_status = serp_tier
                 km.serp_evidence_summary_json = json.dumps(serp_eval, ensure_ascii=False)
 
-        # Ensure exact ONE pending approval exists for current fingerprint when not approved
         if create_approvals:
-            has_current_decision = (
-                db.query(Approval)
-                .filter(
-                    Approval.project_id == project.id,
-                    Approval.target_ref == km.id,
-                    Approval.scope == "BRIEF_ELIGIBILITY",
-                    Approval.target_revision == km.revision,
-                    Approval.target_fingerprint == km.content_fingerprint,
-                    Approval.status.in_(["PENDING", "APPROVED"]),
-                )
-                .first()
-            )
-            if not km.is_approved and not has_current_decision:
-                orig_pk = project.primary_keyword_original or ""
-                is_new_topic = unit["coverage_type"] == "GAP"
-                is_overlap = unit["coverage_type"] == "OVERLAP"
-                apr_type = (
-                    "OVERLAP_MERGE_SPLIT"
-                    if is_overlap
-                    else ("NEW_TOPIC_PROPOSAL" if is_new_topic else "FINAL_MAPPING")
-                )
-                reapproval_tag = " [CẦN DUYỆT LẠI]" if (material_changed and km.revision > 1) else ""
-                db.add(
-                    Approval(
-                        project_id=project.id,
-                        approval_type=apr_type,
-                        target_ref=km.id,
-                        target_revision=km.revision,
-                        target_fingerprint=km.content_fingerprint,
-                        title=f"Phê duyệt Mapping rev #{km.revision} ({page_type}): {primary_kw}{reapproval_tag}",
-                        original_value=orig_pk or "(chưa có mapping trước đó)",
-                        proposed_value=f"{page_type} | {primary_kw} -> {proposed_url} (fp:{km.content_fingerprint[:10]})",
-                        rationale=merge_split,
-                        evidence_json=km.evidence_json,
-                        impact=(
-                            f"Phê duyệt đúng phiên bản rev #{km.revision} cho '{primary_kw}'. "
-                            + (
-                                "Đủ điều kiện xem xét xuất Brief chính thức sau khi hoàn tất tất cả Quality Gates."
-                                if serp_sufficient
-                                else f"Lưu ý: hiện tại là {serp_tier}, vẫn cần bổ sung SERP trước khi xuất Brief chính thức."
-                            )
-                        ),
-                        scope="BRIEF_ELIGIBILITY",
-                        status="PENDING",
-                        version=km.revision,
-                    )
-                )
+            if _ensure_pending_approval_for_mapping(
+                db,
+                project,
+                km,
+                coverage_type=unit["coverage_type"],
+                serp_eval=serp_eval,
+                material_changed=material_changed,
+            ):
                 new_approvals_count += 1
 
         db.flush()
 
-        # Re-evaluate authoritative eligibility to keep content_status 100% consistent
         fresh_ctx = load_project_policy_context(db, project)
         decision = evaluate_mapping_eligibility(project, km, fresh_ctx)
         km.content_status = decision["recommended_content_status"]
@@ -450,7 +691,6 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
             )
         )
 
-    # Archive any removed mappings non-destructively (NEVER hard-delete!)
     for em in existing_mappings:
         em_key = em.logical_key or (f"dg:{em.demand_group_id}" if em.demand_group_id else f"kw:{normalize_text(em.primary_keyword)}")
         if em_key not in seen_logical_keys and not em.is_archived:

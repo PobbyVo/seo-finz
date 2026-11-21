@@ -2,26 +2,75 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import sqlite3
 import uuid
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Generator
 
 from sqlalchemy import create_engine, event
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import ensure_data_dirs, settings
 
 logger = logging.getLogger("finz.db")
 
+_WIN_DRIVE_RE = re.compile(r"^/?([A-Za-z]:[\\/].*)$")
+
 
 class BackupError(RuntimeError):
-    """Raised when a SQLite online backup fails integrity verification or disk write."""
+    """Raised when a SQLite online backup fails integrity verification, path resolution, or disk write."""
 
 
 class Base(DeclarativeBase):
     pass
+
+
+def resolve_sqlite_db_path(
+    database_url: str | None = None,
+    *,
+    base_dir: Path | None = None,
+    platform_name: str | None = None,
+) -> Path:
+    """
+    Resolve the exact filesystem path targeted by a SQLAlchemy SQLite URL using `make_url`.
+    Fails closed for non-SQLite backends and `:memory:` databases so pre-migration backups
+    never silently target a wrong file or report fake safety.
+    """
+    raw_url = database_url or settings.database_url
+    try:
+        parsed = make_url(raw_url)
+    except Exception as exc:
+        raise BackupError(f"INVALID_DATABASE_URL: Không thể phân tích URL cơ sở dữ liệu ({exc}).") from exc
+
+    if not parsed.drivername.lower().startswith("sqlite"):
+        raise BackupError(
+            f"UNSUPPORTED_DB_BACKEND: Sao lưu cục bộ SQLite không hỗ trợ backend '{parsed.drivername}'."
+        )
+
+    db_target = parsed.database
+    if not db_target or db_target == ":memory:" or str(parsed.query.get("mode", "")).lower() == "memory":
+        raise BackupError(
+            "UNSUPPORTED_SQLITE_MEMORY_DB: Không thể sao lưu file cho SQLite in-memory (:memory:)."
+        )
+
+    eff_platform = (platform_name or os.name).lower()
+    # Handle Windows drive letter URLs (e.g. sqlite:///C:/Users/Test User/finz.sqlite3)
+    win_match = _WIN_DRIVE_RE.match(db_target)
+    if eff_platform == "nt" or win_match:
+        win_str = win_match.group(1) if win_match else db_target
+        if eff_platform == "nt" and os.name != "nt":
+            # Cross-platform unit-testable path normalization without failing on POSIX
+            return Path(PureWindowsPath(win_str).as_posix())
+        return Path(win_str)
+
+    p = Path(db_target)
+    if not p.is_absolute():
+        anchor = Path(base_dir) if base_dir is not None else Path.cwd()
+        return (anchor / p).resolve()
+    return p
 
 
 def _create_engine(url: str):
@@ -73,19 +122,26 @@ def backup_database(
     reason: str = "manual",
     *,
     source_path: Path | None = None,
+    database_url: str | None = None,
     backups_dir: Path | None = None,
     verify: bool = True,
 ) -> Path | None:
     """
     Create a WAL-consistent online SQLite backup via sqlite3.Connection.backup().
+    - Resolves the effective SQLite file from `source_path` or `database_url` / `settings.database_url`
+      (NEVER ignoring custom `FINZ_DATABASE_URL`).
+    - Returns None cleanly ONLY when the source SQLite file does not exist yet (fresh bootstrap).
     - Writes to a unique temporary file, verifies integrity (quick_check + foreign_key_check),
       and atomically renames to the final destination.
-    - Cleans up incomplete temp files and FAILS CLOSED on disk-full or verification errors.
+    - Cleans up incomplete temp files and FAILS CLOSED on disk-full, wrong path, or verification errors.
     """
     ensure_data_dirs()
-    src = Path(source_path) if source_path is not None else settings.resolved_db_path
+    src = Path(source_path) if source_path is not None else resolve_sqlite_db_path(database_url or settings.database_url)
     if not src.exists():
+        logger.info("SQLite source %s does not exist yet (fresh bootstrap); skipping backup.", src)
         return None
+    if src.is_dir():
+        raise BackupError(f"Đường dẫn SQLite nguồn là thư mục, không phải tệp hợp lệ: {src}")
 
     target_dir = Path(backups_dir) if backups_dir is not None else settings.backups_dir
     target_dir.mkdir(parents=True, exist_ok=True)
@@ -121,8 +177,9 @@ def backup_database(
             p.stat().st_size for p in target_dir.glob("*.sqlite3") if p.is_file()
         )
         logger.info(
-            "SQLite online backup created: %s (%d bytes; total backups dir: %d bytes)",
+            "SQLite online backup created: %s from %s (%d bytes; total backups dir: %d bytes)",
             dst.name,
+            src,
             size_bytes,
             total_backup_bytes,
         )

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { AlertTriangle, BookOpen, CheckCircle2, Download, FileSpreadsheet, FileText, Printer, Sparkles } from 'lucide-react';
 import { useProject } from '@/context/ProjectContext';
 import { ApiError, apiRequest, downloadExportFile } from '@/lib/api';
-import type { ContentBriefItem, MappingEligibility, StandardizedError } from '@/lib/types';
+import type { ContentBriefItem, ExportHistoryItem, MappingEligibility, StandardizedError } from '@/lib/types';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { StatusBadge } from '@/components/StatusBadge';
 
@@ -27,6 +27,7 @@ interface BriefsPayload {
 export default function Step07BriefPage() {
   const { activeProject, refreshProjects } = useProject();
   const [data, setData] = useState<BriefsPayload | null>(null);
+  const [exportsList, setExportsList] = useState<ExportHistoryItem[]>([]);
   const [selectedMappingIds, setSelectedMappingIds] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
@@ -40,9 +41,13 @@ export default function Step07BriefPage() {
     if (!activeProject) return;
     const reqPid = activeProject.id;
     try {
-      const res = await apiRequest<BriefsPayload>(`/api/v1/projects/${reqPid}/briefs`);
+      const [res, expRes] = await Promise.all([
+        apiRequest<BriefsPayload>(`/api/v1/projects/${reqPid}/briefs`),
+        apiRequest<{ exports: ExportHistoryItem[] }>(`/api/v1/projects/${reqPid}/exports`),
+      ]);
       if (currentPidRef.current !== reqPid) return;
       setData(res);
+      setExportsList(expRes.exports || []);
       const eligRows = res.mappings_eligibility || [];
       setSelectedMappingIds((prev) => {
         const validIds = new Set(eligRows.map((m) => m.id));
@@ -118,6 +123,7 @@ export default function Step07BriefPage() {
     try {
       const fname = await downloadExportFile(activeProject.id, fmt);
       setNotice(`Đã xuất thành công tệp ${fname} (không gọi Google Sheets API, tên file sinh theo dự án ${activeProject.code}).`);
+      await loadBriefs();
     } catch (err) {
       setError({
         code: 'EXPORT_FAILED',
@@ -273,6 +279,55 @@ export default function Step07BriefPage() {
         </div>
       </section>
 
+      {/* Historical Exports Provenance & Freshness List */}
+      {exportsList.length > 0 && (
+        <section className="rounded-2xl border border-slate-800 bg-surface-900 p-4 space-y-3" data-testid="export-history-section">
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+            Lịch sử các bản xuất ({exportsList.length}) — Phân biệt bản hiện hành vs bản lịch sử đã thay thế
+          </div>
+          <div className="space-y-2">
+            {exportsList.map((ex) => (
+              <div
+                key={ex.id}
+                className={`flex flex-wrap items-center justify-between gap-2 rounded-xl border p-3 text-xs ${
+                  ex.is_superseded
+                    ? 'border-rose-500/35 bg-rose-950/20'
+                    : 'border-slate-800 bg-surface-850'
+                }`}
+              >
+                <div className="space-y-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="font-mono text-slate-100 break-all">{ex.filename}</span>
+                    <StatusBadge status={ex.freshness_status} />
+                    <StatusBadge status={ex.recorded_brief_mode} />
+                  </div>
+                  {ex.is_superseded && ex.superseded_reason && (
+                    <p className="text-[11px] text-rose-200/90">{ex.superseded_reason}</p>
+                  )}
+                </div>
+                <div className="shrink-0">
+                  {ex.is_superseded ? (
+                    <a
+                      href={`${(process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/+$/, '')}${ex.historical_download_url}`}
+                      className="inline-flex items-center gap-1 rounded-lg border border-rose-500/40 bg-rose-950/40 px-2.5 py-1.5 text-[11px] font-semibold text-rose-200 hover:bg-rose-900/50"
+                    >
+                      <Download className="h-3 w-3" /> Tải bản lịch sử (đã hết hiệu lực)
+                    </a>
+                  ) : (
+                    <a
+                      href={`${(process.env.NEXT_PUBLIC_API_BASE || '').replace(/\/+$/, '')}${ex.download_url}`}
+                      className="inline-flex items-center gap-1 rounded-lg border border-slate-700 bg-surface-900 px-2.5 py-1.5 text-[11px] font-medium text-slate-200 hover:bg-slate-800"
+                    >
+                      <Download className="h-3 w-3" /> Tải lại bản hiện hành
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Optional 13 Formulas + 16 Engagement Tactics Library */}
       {showCatalog && data && (
         <section className="grid gap-5 lg:grid-cols-2 rounded-2xl border border-violet-500/30 bg-surface-900 p-5 text-xs">
@@ -310,7 +365,10 @@ export default function Step07BriefPage() {
                 <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-3 text-xs text-rose-200 flex items-center gap-2">
                   <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
                   <span>
-                    <strong>Brief đã cũ (STALE):</strong> Mapping hoặc bằng chứng gốc đã thay đổi sau khi tạo bản này. Hãy phê duyệt phiên bản mới và tạo lại Brief.
+                    <strong>Brief đã cũ (STALE):</strong>{' '}
+                    {b.stale_reasons && b.stale_reasons.length > 0
+                      ? b.stale_reasons.join(' ')
+                      : 'Mapping hoặc bằng chứng gốc đã thay đổi sau khi tạo bản này. Hãy phê duyệt phiên bản mới và tạo lại Brief.'}
                   </span>
                 </div>
               )}

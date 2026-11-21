@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import html
 import io
 import json
@@ -15,6 +16,7 @@ from app.config import ensure_data_dirs, settings
 from app.domain.brief_engine import serialize_brief
 from app.domain.eligibility_policy import (
     POLICY_VERSION,
+    compute_effective_brief_freshness,
     evaluate_mapping_eligibility,
     load_project_policy_context,
 )
@@ -29,18 +31,12 @@ def _safe_project_prefix(project: Project) -> str:
     return f"{code}_{name_slug}"
 
 
-def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
+def compute_project_export_state(
+    db: Session,
+    project: Project,
+) -> dict[str, Any]:
+    """Compute live mapping decisions, live brief freshness, and canonical evidence_state_hash."""
     ctx = load_project_policy_context(db, project)
-    evidence_rows = (
-        db.query(EvidenceRow)
-        .filter(
-            EvidenceRow.project_id == project.id,
-            EvidenceRow.row_type == "METRICS",
-            EvidenceRow.is_duplicate == False,  # noqa: E712
-        )
-        .order_by(EvidenceRow.volume.desc().nullslast())
-        .all()
-    )
     mappings = (
         db.query(KeywordMapping)
         .filter(KeywordMapping.project_id == project.id, KeywordMapping.is_archived == False)  # noqa: E712
@@ -53,15 +49,113 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
         .order_by(ContentBrief.br_code.asc())
         .all()
     )
+    mappings_by_id = {m.id: m for m in mappings}
+    decisions_by_id = {m.id: evaluate_mapping_eligibility(project, m, ctx) for m in mappings}
+
+    live_briefs: list[dict[str, Any]] = []
+    brief_fingerprints: dict[str, dict[str, Any]] = {}
+    for b in briefs:
+        m = mappings_by_id.get(b.keyword_mapping_id) if b.keyword_mapping_id else None
+        dec = decisions_by_id.get(b.keyword_mapping_id) if b.keyword_mapping_id else None
+        fresh = compute_effective_brief_freshness(b, m, dec)
+        sb = serialize_brief(b, freshness=fresh)
+        live_briefs.append(sb)
+        brief_fingerprints[b.id] = {
+            "mapping_id": b.keyword_mapping_id,
+            "mapping_revision": b.mapping_revision,
+            "mapping_fingerprint": b.mapping_fingerprint,
+            "live_fingerprint": dec["live_fingerprint"] if dec else "",
+            "brief_mode": sb["brief_mode"],
+            "is_stale": sb["is_stale"],
+        }
+
+    state_payload = {
+        "policy_version": POLICY_VERSION,
+        "mappings": [
+            {
+                "id": m.id,
+                "rev": m.revision,
+                "live_fp": decisions_by_id[m.id]["live_fingerprint"],
+                "eligible": decisions_by_id[m.id]["eligible_official"],
+            }
+            for m in mappings
+        ],
+        "briefs": brief_fingerprints,
+    }
+    state_hash = hashlib.sha256(
+        json.dumps(state_payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+    ).hexdigest()
+
+    return {
+        "ctx": ctx,
+        "mappings": mappings,
+        "decisions_by_id": decisions_by_id,
+        "live_briefs": live_briefs,
+        "brief_fingerprints": brief_fingerprints,
+        "evidence_state_hash": state_hash,
+    }
+
+
+def evaluate_export_record_freshness(
+    record: ExportRecord,
+    live_state: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    Truthfully classify an immutable historical ExportRecord as CURRENT vs OUTDATED_SUPERSEDED.
+    NEVER mutates stored export file bytes!
+    """
+    reasons: list[str] = []
+    if getattr(record, "is_superseded", False):
+        reasons.append(getattr(record, "superseded_reason", "") or "Bản xuất đã bị thay thế do bằng chứng/Mapping cập nhật.")
+
+    rec_hash = getattr(record, "evidence_state_hash", "") or ""
+    if rec_hash and rec_hash != live_state["evidence_state_hash"]:
+        reasons.append("Trạng thái bằng chứng/Mapping hiện tại đã thay đổi so với thời điểm xuất tệp này.")
+
+    bf_map = json.loads(getattr(record, "brief_fingerprints_json", "{}") or "{}")
+    decisions_by_id = live_state["decisions_by_id"]
+    for _bid, meta in bf_map.items():
+        if not isinstance(meta, dict):
+            continue
+        mid = meta.get("mapping_id")
+        if mid and mid in decisions_by_id:
+            dec = decisions_by_id[mid]
+            if meta.get("live_fingerprint") and meta["live_fingerprint"] != dec["live_fingerprint"]:
+                reasons.append(f"Bằng chứng cho '{dec['primary_keyword']}' đã thay đổi sau khi xuất.")
+            elif meta.get("brief_mode") == "OFFICIAL" and not dec["eligible_official"]:
+                reasons.append(f"Mapping '{dec['primary_keyword']}' không còn đủ điều kiện OFFICIAL.")
+
+    is_superseded = len(reasons) > 0
+    return {
+        "is_superseded": is_superseded,
+        "freshness_status": "OUTDATED_SUPERSEDED" if is_superseded else "CURRENT",
+        "superseded_reason": " ".join(dict.fromkeys(r for r in reasons if r)),
+    }
+
+
+def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
+    live_state = compute_project_export_state(db, project)
+    evidence_rows = (
+        db.query(EvidenceRow)
+        .filter(
+            EvidenceRow.project_id == project.id,
+            EvidenceRow.row_type == "METRICS",
+            EvidenceRow.is_duplicate == False,  # noqa: E712
+        )
+        .order_by(EvidenceRow.volume.desc().nullslast())
+        .all()
+    )
+    mappings = live_state["mappings"]
+    decisions_by_id = live_state["decisions_by_id"]
 
     mapping_rows: list[dict[str, Any]] = []
     for m in mappings:
-        dec = evaluate_mapping_eligibility(project, m, ctx)
+        dec = decisions_by_id[m.id]
         mapping_rows.append(
             {
                 "id": m.id,
                 "revision": m.revision,
-                "content_fingerprint": m.content_fingerprint[:12],
+                "content_fingerprint": dec["live_fingerprint"][:12],
                 "primary_keyword": m.primary_keyword,
                 "secondary_keywords": json.loads(m.secondary_keywords_json or "[]"),
                 "page_type": m.page_type,
@@ -86,6 +180,8 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
     return {
         "policy_version": POLICY_VERSION,
         "contains_api_keys": False,
+        "evidence_state_hash": live_state["evidence_state_hash"],
+        "brief_fingerprints": live_state["brief_fingerprints"],
         "project": {
             "id": project.id,
             "code": project.code,
@@ -111,14 +207,15 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
             for r in evidence_rows
         ],
         "keyword_mapping": mapping_rows,
-        "content_briefs": [serialize_brief(b) for b in briefs],
+        "content_briefs": live_state["live_briefs"],
     }
 
 
 def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[bytes, str, str, ExportRecord]:
     """
     Export SEO deliverables in XLSX (3 logical sheets), CSV, JSON, or printable HTML.
-    Includes truthful verification/staleness labels and NEVER includes API keys or secret refs.
+    Dynamically recalculates live eligibility & staleness BEFORE constructing filename/content
+    and NEVER includes API keys or secret refs.
     """
     ensure_data_dirs()
     fmt_clean = fmt.lower().strip()
@@ -161,6 +258,10 @@ def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[byte
         filename=filename,
         stored_path=str(out_path),
         brief_mode=mode,
+        evidence_state_hash=data["evidence_state_hash"],
+        brief_fingerprints_json=json.dumps(data["brief_fingerprints"], ensure_ascii=False),
+        is_superseded=False,
+        superseded_reason="",
     )
     db.add(record)
     db.commit()
