@@ -1,0 +1,17 @@
+{
+  "name": "finz-seo-workbench",
+  "version": "1.6.0",
+  "private": true,
+  "description": "FinZ SEO Workbench V1.6 — Human-in-the-loop Evidence-Based SEO Decision System",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "setup": "node scripts/dev.mjs --setup-only",
+    "test": "node scripts/run-tests.mjs",
+    "test:api": "services/api/.venv/bin/pytest services/api/tests -v",
+    "build:web": "npm --prefix apps/web run build",
+    "typecheck:web": "npm --prefix apps/web run typecheck"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
