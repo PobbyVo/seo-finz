@@ -38,7 +38,13 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization", "Accept"],
-    expose_headers=["X-FinZ-Export-Filename", "Content-Disposition"],
+    expose_headers=[
+        "X-FinZ-Export-Filename",
+        "X-FinZ-Export-Id",
+        "X-FinZ-Export-Freshness",
+        "X-FinZ-Export-Warning",
+        "Content-Disposition",
+    ],
 )
 
 API_PREFIX = "/api/v1"

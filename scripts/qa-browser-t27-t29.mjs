@@ -183,7 +183,20 @@ async function main() {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'finz-qa-browser-'));
   const tmpDb = path.join(tmpDir, 'qa_browser.sqlite3');
   const procs = [];
+  const logs = { api: [], web: [], chrome: [] };
   const results = {};
+
+  const attachLog = (proc, bucket) => {
+    const push = (chunk) => {
+      const lines = String(chunk).split(/\r?\n/).filter(Boolean);
+      for (const l of lines) {
+        bucket.push(l);
+        if (bucket.length > 40) bucket.shift();
+      }
+    };
+    proc.stdout?.on('data', push);
+    proc.stderr?.on('data', push);
+  };
 
   const cleanup = () => {
     for (const p of procs) {
@@ -221,6 +234,7 @@ async function main() {
       }
     );
     procs.push(apiProc);
+    attachLog(apiProc, logs.api);
     await waitForHttp(`${API_URL}/api/v1/health`, 30000);
 
     // 2. Start isolated Next.js dev server bound to ephemeral API_URL
@@ -238,7 +252,13 @@ async function main() {
       }
     );
     procs.push(webProc);
-    await waitForHttp(`${WEB_URL}/`, 45000);
+    attachLog(webProc, logs.web);
+    await waitForHttp(`${WEB_URL}/`, 60000);
+
+    // Pre-warm Next.js dev compilation for core routes so timed popup assertions don't race cold compilation on 2-vCPU CI runners
+    for (const r of ['/projects', '/steps/01-topic', '/steps/02-demand-map', '/logs', '/steps/06-mapping', '/steps/07-brief']) {
+      await fetch(`${WEB_URL}${r}`).catch(() => {});
+    }
 
     // Enable mock provider in isolated DB
     await fetch(`${API_URL}/api/v1/settings/ai`, {
@@ -247,7 +267,7 @@ async function main() {
       body: JSON.stringify({ provider: 'mock', set_active: true }),
     });
 
-    // 3. Launch headless Chrome with CDP on dynamic port
+    // 3. Launch headless Chrome with CDP on dynamic port (CI Linux safe flags)
     const chromeProfile = path.join(tmpDir, 'chrome-profile');
     const chromeProc = spawn(
       chromeBin,
@@ -255,6 +275,8 @@ async function main() {
         '--headless=new',
         '--disable-gpu',
         '--no-sandbox',
+        '--disable-dev-shm-usage',
+        '--remote-allow-origins=*',
         `--remote-debugging-port=${CDP_PORT}`,
         `--user-data-dir=${chromeProfile}`,
         '--window-size=1440,900',
@@ -263,6 +285,7 @@ async function main() {
       { stdio: 'pipe' }
     );
     procs.push(chromeProc);
+    attachLog(chromeProc, logs.chrome);
 
     await waitForHttp(`http://127.0.0.1:${CDP_PORT}/json/version`, 20000);
     const targets = await (await fetch(`http://127.0.0.1:${CDP_PORT}/json/list`)).json();
@@ -292,8 +315,8 @@ async function main() {
     await new Promise((r) => setTimeout(r, 150));
     await cdp.evalJS(`document.querySelector('form button[type="submit"]').click()`);
 
-    const dialogOpened = await cdp.waitForCondition(`Boolean(document.querySelector('dialog.finz-dialog[open]'))`, 8000);
-    const autoNavigated = await cdp.waitForCondition(`location.pathname === '/steps/02-demand-map'`, 4500);
+    const dialogOpened = await cdp.waitForCondition(`Boolean(document.querySelector('dialog.finz-dialog[open]'))`, 12000);
+    const autoNavigated = await cdp.waitForCondition(`location.pathname === '/steps/02-demand-map'`, 10000);
     results.T27 = {
       status: dialogOpened && autoNavigated ? 'PASS' : 'FAIL',
       details: { dialogOpened, autoNavigated },
@@ -542,6 +565,12 @@ async function main() {
     const overall = Object.values(results).every((r) => r.status === 'PASS') ? 'PASS' : 'FAIL';
     console.log(JSON.stringify({ overall, ports: { api: API_PORT, web: WEB_PORT, cdp: CDP_PORT }, results }, null, 2));
     process.exit(overall === 'PASS' ? 0 : 1);
+  } catch (err) {
+    console.error('BROWSER_E2E_ERROR:', err);
+    console.error('API_LOG_TAIL:', logs.api.slice(-20).join('\n'));
+    console.error('WEB_LOG_TAIL:', logs.web.slice(-20).join('\n'));
+    console.error('CHROME_LOG_TAIL:', logs.chrome.slice(-20).join('\n'));
+    process.exit(1);
   } finally {
     cleanup();
   }

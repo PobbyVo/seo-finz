@@ -78,9 +78,6 @@ jobs:
       - name: TypeScript typecheck
         run: npm --prefix apps/web run typecheck
 
-      - name: Next.js production build
-        run: npm --prefix apps/web run build
-
       - name: Install backend runtime for isolated E2E server
         run: |
           python -m venv services/api/.venv
@@ -103,4 +100,11 @@ jobs:
       - name: Run headless Chrome E2E (T27-T29, popup negatives, stale freshness & export UI)
         env:
           CHROME_BIN: ${{ steps.chrome.outputs.bin }}
-        run: node scripts/qa-browser-t27-t29.mjs
+        run: |
+          rm -rf apps/web/.next
+          node scripts/qa-browser-t27-t29.mjs
+
+      - name: Next.js production build
+        run: |
+          rm -rf apps/web/.next
+          npm --prefix apps/web run build
