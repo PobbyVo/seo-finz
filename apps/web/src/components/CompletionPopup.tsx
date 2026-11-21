@@ -21,6 +21,8 @@ export function CompletionPopup() {
   const titleId = useId();
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevPathnameRef = useRef(pathname);
+  const prevProjectIdRef = useRef<string | null>(activeProjectId);
   const [countdownActive, setCountdownActive] = useState(false);
 
   const clearTimer = () => {
@@ -31,10 +33,18 @@ export function CompletionPopup() {
     setCountdownActive(false);
   };
 
-  // Cancel timer on route change or project switch
+  // Cancel timer on actual route change or switching away from an existing project
   useEffect(() => {
-    clearTimer();
-    closeCompletionPopup();
+    const routeChanged = prevPathnameRef.current !== pathname;
+    const switchedExistingProject =
+      prevProjectIdRef.current !== null && prevProjectIdRef.current !== activeProjectId;
+    prevPathnameRef.current = pathname;
+    prevProjectIdRef.current = activeProjectId;
+
+    if (routeChanged || switchedExistingProject) {
+      clearTimer();
+      closeCompletionPopup();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname, activeProjectId]);
 

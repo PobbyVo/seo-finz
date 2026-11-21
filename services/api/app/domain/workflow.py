@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -11,7 +10,6 @@ from app.models import (
     ContentBrief,
     Critique,
     DemandGroup,
-    EvidenceRow,
     KeywordMapping,
     Project,
     ResearchBatch,
@@ -61,12 +59,12 @@ SEMRUSH_REPORT_GUIDES: dict[str, dict[str, Any]] = {
         ],
     },
     "ORGANIC_RESULTS": {
-        "columns": ["Keyword", "Position", "URL", "Title", "Page Type (nếu có)"],
+        "columns": ["Position", "Type (Organic/AI Overview)", "Domain", "URL", "Keyword (nếu có)"],
         "steps": [
-            "Mở giao diện Semrush → Keyword Overview → phần SERP Analysis (hoặc Position/Organic Research tùy gói).",
-            "Xuất bảng kết quả tự nhiên (Organic Results) có các cột URL, Position và Title nếu gói Semrush hỗ trợ.",
+            "Mở giao diện Semrush → Keyword Overview → phần SERP Analysis (hoặc Organic Results).",
+            "Xuất bảng kết quả tự nhiên sang CSV/XLSX (hỗ trợ trực tiếp file SERP Analysis có cột Position, Type, Domain, URL).",
             "Lưu ý: Nếu không xuất được báo cáo này, bạn KHÔNG cần nhập tay URL — hệ thống sẽ gắn nhãn SERP_NOT_VERIFIED cho bản kế hoạch dự thảo.",
-            "Khi có file ORGANIC_RESULTS, tải lên Bước 04 để backend dùng parser Organic chuyên biệt kiểm chứng dạng trang.",
+            "Khi tải lên Bước 04, chọn đúng phiếu Yêu cầu Semrush này để gắn chính xác từ khóa cho bảng SERP.",
         ],
     },
 }
@@ -97,10 +95,11 @@ def ensure_workflow_steps(db: Session, project_id: str) -> list[WorkflowStep]:
 
 
 def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
-    """Recompute authentic 7-step statuses, blockers, and next actions from SQLite state."""
+    """Recompute authentic 7-step statuses, blockers, and next actions from SQLite & policy truth."""
     steps = ensure_workflow_steps(db, project.id)
     gate_eval = evaluate_all_gates(db, project)
     summary = gate_eval["summary"]
+    elig_map = gate_eval["mapping_eligibilities"]
 
     dgs = db.query(DemandGroup).filter(DemandGroup.project_id == project.id).all()
     reqs = db.query(ResearchRequest).filter(ResearchRequest.project_id == project.id).all()
@@ -110,7 +109,11 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         .filter(Critique.project_id == project.id, Critique.stage == "POST_SEMRUSH")
         .all()
     )
-    mappings = db.query(KeywordMapping).filter(KeywordMapping.project_id == project.id).all()
+    mappings = (
+        db.query(KeywordMapping)
+        .filter(KeywordMapping.project_id == project.id, KeywordMapping.is_archived == False)  # noqa: E712
+        .all()
+    )
     approvals = db.query(Approval).filter(Approval.project_id == project.id).all()
     briefs = db.query(ContentBrief).filter(ContentBrief.project_id == project.id).all()
 
@@ -120,8 +123,11 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
 
     step_map = {s.step_number: s for s in steps}
 
-    # Step 1: Topic setup
-    has_topic = bool((project.topic_pillar_code or project.topic_pillar_name or project.main_topic) and (project.primary_keyword_original or project.primary_keyword_current))
+    # Step 1
+    has_topic = bool(
+        (project.topic_pillar_code or project.topic_pillar_name or project.main_topic)
+        and (project.primary_keyword_original or project.primary_keyword_current)
+    )
     if has_topic:
         step_map[1].status = "QUALITY_APPROVED" if (project.business_goal and project.target_audience) else "PROCESS_COMPLETED"
         step_map[1].summary = f"{project.topic_pillar_code or project.code}: {project.primary_keyword_current or project.primary_keyword_original}"
@@ -129,10 +135,15 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[1].status = "READY"
         step_map[1].summary = "Cần nhập Topic Pillar & keyword chính từ Excel/CSV hoặc form."
 
-    # Step 2: Demand Map
+    # Step 2
     if dgs:
-        step_map[2].status = "PROCESS_COMPLETED"
-        step_map[2].summary = f"{len(dgs)} nhóm nhu cầu đã được AI phân tích & lưu SQLite."
+        uncertain_dgs = [d for d in dgs if d.status == "UNCERTAIN"]
+        step_map[2].status = "REVIEW_REQUIRED" if uncertain_dgs else "PROCESS_COMPLETED"
+        step_map[2].summary = (
+            f"{len(dgs)} nhóm nhu cầu ({len(uncertain_dgs)} nhóm UNCERTAIN cần kiểm tra nguồn)."
+            if uncertain_dgs
+            else f"{len(dgs)} nhóm nhu cầu đã được AI phân tích & lưu SQLite."
+        )
     elif has_topic:
         step_map[2].status = "READY"
         step_map[2].summary = "Sẵn sàng chạy AI Topic Analyst & Critic."
@@ -140,7 +151,7 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[2].status = "NOT_STARTED"
         step_map[2].summary = ""
 
-    # Step 3: Semrush Requests
+    # Step 3
     if reqs:
         if waiting_reqs:
             step_map[3].status = "WAITING_USER"
@@ -155,10 +166,13 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[3].status = "NOT_STARTED"
         step_map[3].summary = ""
 
-    # Step 4: Upload & column mapping
+    # Step 4
     if batches:
         step_map[4].status = "PROCESS_COMPLETED"
-        step_map[4].summary = f"Đã xác nhận {len(batches)} batch ({summary['metrics_rows_count']} metrics, {summary['organic_rows_count']} organic)."
+        step_map[4].summary = (
+            f"Đã xác nhận {len(batches)} batch ({summary['metrics_rows_count']} metrics đúng thị trường, "
+            f"{summary['organic_rows_count']} organic hợp lệ)."
+        )
     elif reqs:
         step_map[4].status = "WAITING_USER"
         step_map[4].summary = "Chờ tải file CSV/XLSX xuất từ Semrush và xác nhận ghép cột."
@@ -166,14 +180,15 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[4].status = "NOT_STARTED"
         step_map[4].summary = ""
 
-    # Step 5: Evidence validation & Critic post-Semrush
+    # Step 5
     if critiques_post:
         last_c = critiques_post[-1]
-        if last_c.decision_status in ("REVIEW_REQUIRED", "WAITING_USER", "HOLD"):
-            step_map[5].status = "REVIEW_REQUIRED"
-        else:
-            step_map[5].status = "PROCESS_COMPLETED"
-        step_map[5].summary = f"Đã chạy {len(critiques_post)} lượt Critic sau Semrush (chu kỳ {project.research_cycle})."
+        step_map[5].status = (
+            "REVIEW_REQUIRED"
+            if last_c.decision_status in ("REVIEW_REQUIRED", "WAITING_USER", "HOLD")
+            else "PROCESS_COMPLETED"
+        )
+        step_map[5].summary = f"Đã chạy {len(critiques_post)} lượt Critic sau Semrush (chu kỳ #{project.research_cycle})."
     elif batches:
         step_map[5].status = "READY"
         step_map[5].summary = "Đã có dữ liệu Semrush — sẵn sàng kiểm tra Quality Gates & chạy AI Critic."
@@ -181,18 +196,22 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[5].status = "NOT_STARTED"
         step_map[5].summary = ""
 
-    # Step 6: Keyword Mapping
-    approved_maps = [m for m in mappings if m.is_approved]
+    # Step 6
+    eligible_count = summary["eligible_official_count"]
+    stale_approval_count = sum(1 for d in elig_map.values() if d["approval_state"] == "STALE_SUPERSEDED")
     if mappings:
-        if approved_maps and not pending_approvals and summary["serp_verified"]:
+        if eligible_count == len(mappings) and not pending_approvals:
             step_map[6].status = "QUALITY_APPROVED"
-            step_map[6].summary = f"{len(approved_maps)}/{len(mappings)} mapping đã duyệt kèm bằng chứng SERP."
-        elif pending_approvals:
+            step_map[6].summary = f"{eligible_count}/{len(mappings)} mapping đạt đủ Quality Gates & phê duyệt."
+        elif pending_approvals or stale_approval_count > 0:
             step_map[6].status = "HOLD"
-            step_map[6].summary = f"Có {len(pending_approvals)} quyết định chờ bạn phê duyệt tại Chờ phê duyệt."
+            step_map[6].summary = (
+                f"{eligible_count}/{len(mappings)} mapping đủ điều kiện chính thức · "
+                f"{len(pending_approvals)} mục chờ phê duyệt."
+            )
         else:
             step_map[6].status = "REVIEW_REQUIRED"
-            step_map[6].summary = f"{len(mappings)} mapping dự thảo ({summary['serp_status']})."
+            step_map[6].summary = f"{eligible_count}/{len(mappings)} mapping đủ điều kiện chính thức ({summary['serp_status']})."
     elif batches:
         step_map[6].status = "READY"
         step_map[6].summary = "Sẵn sàng lập kế hoạch bài viết & Keyword Mapping dự thảo."
@@ -200,26 +219,29 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
         step_map[6].status = "NOT_STARTED"
         step_map[6].summary = ""
 
-    # Step 7: Content Brief & Export
-    official_briefs = [b for b in briefs if b.brief_mode == "OFFICIAL"]
-    if official_briefs:
+    # Step 7
+    official_fresh_briefs = [b for b in briefs if b.brief_mode == "OFFICIAL" and not b.is_stale]
+    stale_briefs = [b for b in briefs if b.is_stale]
+    if official_fresh_briefs and not stale_briefs:
         step_map[7].status = "QUALITY_APPROVED"
-        step_map[7].summary = f"{len(official_briefs)} Content Brief CHÍNH THỨC sẵn sàng xuất."
+        step_map[7].summary = f"{len(official_fresh_briefs)} Content Brief CHÍNH THỨC sẵn sàng xuất."
+    elif stale_briefs:
+        step_map[7].status = "REVIEW_REQUIRED"
+        step_map[7].summary = f"Có {len(stale_briefs)} Content Brief đã cũ do Mapping/Evidence thay đổi — cần duyệt và tạo lại."
     elif briefs:
         step_map[7].status = "PROCESS_COMPLETED"
         step_map[7].summary = f"{len(briefs)} Content Brief DỰ THẢO ({summary['serp_status']})."
     elif mappings:
         step_map[7].status = "READY"
         step_map[7].summary = (
-            "Đủ điều kiện tạo Content Brief CHÍNH THỨC."
-            if summary["can_generate_official_brief"]
-            else "Có thể tạo Brief DỰ THẢO (SERP_NOT_VERIFIED) hoặc phê duyệt/bổ sung SERP để xuất chính thức."
+            f"Có {eligible_count}/{len(mappings)} mapping đủ điều kiện tạo Brief CHÍNH THỨC."
+            if eligible_count > 0
+            else "Chưa có mapping nào đủ điều kiện chính thức — chỉ có thể tạo Brief DỰ THẢO."
         )
     else:
         step_map[7].status = "NOT_STARTED"
         step_map[7].summary = ""
 
-    # Blockers list (cause, impact, solution, CTA)
     blockers: list[dict[str, Any]] = []
     if not has_topic:
         blockers.append(
@@ -241,23 +263,27 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
                 "severity": "WARNING",
                 "title": f"{summary['missing_kd_count']} keyword thiếu chỉ số KD",
                 "cause": "File Semrush đã import thiếu cột Keyword Difficulty hoặc giá trị bị trống.",
-                "impact": "Không thể đánh giá độ khó theo KD, nhưng vẫn xem được Volume/Intent nếu có.",
+                "impact": "Các mapping thiếu KD bị chặn tạo Brief CHÍNH THỨC (vẫn xem được Volume & tạo Brief DỰ THẢO).",
                 "solution": "Xuất lại báo cáo Keyword Overview có cột KD từ Semrush và tải bổ sung.",
                 "cta_label": "Mở Yêu cầu Semrush",
                 "cta_href": "/steps/03-semrush",
             }
         )
-    if summary["metrics_rows_count"] > 0 and not summary["serp_verified"]:
+    if summary["metrics_rows_count"] > 0 and summary["serp_status"] in ("SERP_NOT_VERIFIED", "PARTIAL_SERP_EVIDENCE"):
         blockers.append(
             {
-                "code": "SERP_NOT_VERIFIED",
+                "code": summary["serp_status"],
                 "severity": "WARNING",
-                "title": "Chưa có bằng chứng SERP (ORGANIC_RESULTS)",
-                "cause": "Chưa upload báo cáo ORGANIC_RESULTS từ Semrush.",
-                "impact": "Kế hoạch bài viết và Content Brief chỉ ở chế độ DỰ THẢO (SERP_NOT_VERIFIED), không được đóng dấu đã kiểm chứng.",
-                "solution": "Nếu tài khoản Semrush hỗ trợ, tạo yêu cầu ORGANIC_RESULTS ở Bước 03 và tải file lên Bước 04.",
-                "cta_label": "Xem Bước 03",
-                "cta_href": "/steps/03-semrush",
+                "title": (
+                    "Chưa có bằng chứng SERP đầy đủ theo từng từ khóa"
+                    if summary["serp_status"] == "SERP_NOT_VERIFIED"
+                    else "Bằng chứng SERP mới đạt một phần (PARTIAL_SERP_EVIDENCE)"
+                ),
+                "cause": "Chưa đủ >= 3 URL organic hợp lệ cho từng từ khóa chính trong cùng thị trường.",
+                "impact": "Các mapping thiếu SERP chỉ ở chế độ DỰ THẢO, không được xuất Content Brief CHÍNH THỨC.",
+                "solution": "Xuất báo cáo SERP Analysis / ORGANIC_RESULTS từ Semrush cho đúng từ khóa và tải lên Bước 04.",
+                "cta_label": "Mở Bước 04",
+                "cta_href": "/steps/04-upload",
             }
         )
     if pending_approvals:
@@ -266,15 +292,27 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
                 "code": "PENDING_HUMAN_APPROVAL",
                 "severity": "WARNING",
                 "title": f"{len(pending_approvals)} quyết định SEO đang chờ phê duyệt",
-                "cause": "AI và engine chỉ được phép đề xuất; các thay đổi primary keyword, chủ đề mới hoặc chốt mapping cần bạn xác nhận.",
-                "impact": "Gate F6 đang ở trạng thái HOLD nên chưa thể xuất Content Brief chính thức.",
+                "cause": "AI và engine chỉ đề xuất; người dùng phải duyệt đúng phiên bản/fingerprint hiện hành.",
+                "impact": "Gate F6 đang ở trạng thái HOLD nên chưa thể xuất Content Brief CHÍNH THỨC cho các mục chờ duyệt.",
                 "solution": "Mở màn hình Chờ phê duyệt để duyệt, từ chối hoặc yêu cầu bổ sung bằng chứng.",
                 "cta_label": "Mở Chờ phê duyệt",
                 "cta_href": "/approvals",
             }
         )
+    if stale_briefs:
+        blockers.append(
+            {
+                "code": "BRIEF_STALE_NEEDS_REGENERATION",
+                "severity": "WARNING",
+                "title": f"{len(stale_briefs)} Content Brief đã cũ do thay đổi Mapping/Evidence",
+                "cause": "Dữ liệu Mapping hoặc bằng chứng đã cập nhật lên phiên bản mới hơn bản dùng khi sinh Brief.",
+                "impact": "Brief cũ tự động bị hạ xuống DRAFT (STALE) để tránh dùng tài liệu lỗi thời.",
+                "solution": "Phê duyệt lại phiên bản Mapping mới rồi tạo lại Content Brief ở Bước 07.",
+                "cta_label": "Mở Bước 07",
+                "cta_href": "/steps/07-brief",
+            }
+        )
 
-    # Next action calculation
     if not has_topic:
         next_action = {
             "title": "Thiết lập Topic Pillar & Keyword nguồn",
@@ -320,7 +358,7 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
     elif pending_approvals:
         next_action = {
             "title": f"Phê duyệt {len(pending_approvals)} đề xuất SEO quan trọng",
-            "description": "Rà soát giá trị gốc, đề xuất mới và bằng chứng trước khi tạo Content Brief chính thức.",
+            "description": "Rà soát phiên bản Mapping, giá trị gốc, đề xuất mới và bằng chứng trước khi tạo Content Brief chính thức.",
             "cta_label": "Mở Chờ phê duyệt",
             "cta_href": "/approvals",
         }
@@ -355,6 +393,7 @@ def refresh_workflow_state(db: Session, project: Project) -> dict[str, Any]:
             "research_batches": len(batches),
             "pending_approvals": len(pending_approvals),
             "keyword_mappings": len(mappings),
+            "eligible_official_mappings": eligible_count,
             "content_briefs": len(briefs),
         },
         "gates": gate_eval["gates"],

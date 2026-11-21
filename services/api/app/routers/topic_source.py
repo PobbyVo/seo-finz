@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.config import ensure_data_dirs, settings
 from app.db import get_db
 from app.domain.taxonomy_parser import normalize_text, parse_topic_source_file
+from app.security.upload_guard import build_unique_upload_path, read_bounded_upload, sanitize_upload_filename
 from app.models import (
     ContentCode,
     FileUpload,
@@ -41,13 +42,8 @@ async def preview_topic_source(
     if not project:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
 
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="File tải lên rỗng.")
-    if len(raw) > settings.max_upload_bytes:
-        raise HTTPException(status_code=400, detail="File vượt quá giới hạn dung lượng an toàn.")
-
-    filename = file.filename or "topic_source.xlsx"
+    raw = await read_bounded_upload(file)
+    filename = sanitize_upload_filename(file.filename, default_name="topic_source.xlsx")
     try:
         preview = parse_topic_source_file(raw, filename)
     except ValueError as exc:
@@ -55,8 +51,7 @@ async def preview_topic_source(
 
     ensure_data_dirs()
     sha = hashlib.sha256(raw).hexdigest()
-    safe_name = f"{project.id}_topic_{sha[:10]}_{Path(filename).name}"
-    stored = settings.uploads_dir / safe_name
+    stored = build_unique_upload_path(settings.uploads_dir, project.id, "topic", sha, filename)
     stored.write_bytes(raw)
 
     upload = FileUpload(

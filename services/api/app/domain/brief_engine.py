@@ -5,7 +5,11 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.domain.quality_gates import evaluate_all_gates
+from app.domain.eligibility_policy import (
+    POLICY_VERSION,
+    evaluate_mapping_eligibility,
+    load_project_policy_context,
+)
 from app.models import BriefVersion, ContentBrief, KeywordMapping, Project
 
 # Exact 13 Writing Formulas from V1.6 Section 5.8
@@ -46,14 +50,13 @@ ENGAGEMENT_TACTICS: list[dict[str, Any]] = [
 ]
 
 
-def _select_writing_strategy(mapping: KeywordMapping, project: Project) -> dict[str, Any]:
-    """
-    Build whole-article Writing Strategy:
-    - 1 primary formula + up to 2 supporting formulas
-    - Rationale
-    - 1-2 opening hook ideas
-    - 3-6 reader engagement tactics at WHOLE-ARTICLE level (NOT forced per H2/H3!).
-    """
+class BriefEligibilityError(ValueError):
+    def __init__(self, detail: dict[str, Any]):
+        super().__init__(detail.get("reason", "Không đủ điều kiện tạo Content Brief chính thức."))
+        self.detail = detail
+
+
+def _select_writing_strategy(mapping: KeywordMapping) -> dict[str, Any]:
     kw = mapping.primary_keyword
     page_type = mapping.page_type or "ARTICLE"
     intent_low = (mapping.intent or "").lower()
@@ -106,56 +109,116 @@ def generate_content_briefs(
     mapping_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """
-    Generate Content Briefs strictly enforcing quality gates:
-    - OFFICIAL brief ONLY if mapping.is_approved AND SERP verified AND metrics exist.
-    - DRAFT allowed when allow_draft=True, explicitly stamped SERP_NOT_VERIFIED / DRAFT.
-    - Never hardcodes any demo project name.
+    Generate Content Briefs strictly enforcing the authoritative per-mapping eligibility policy:
+    - ZERO BYPASS: Even when `allow_draft=True`, a mapping receives `OFFICIAL` ONLY if
+      `evaluate_mapping_eligibility(...)["eligible_official"]` is True!
+    - When `allow_draft=False`, ALL selected mappings (or at least 1 if none specified) MUST
+      pass full Phase 1 eligibility; if an explicit ineligible mapping_id is requested or
+      zero eligible mappings exist, raises `BriefEligibilityError` (HTTP 400).
+    - Preserves existing ContentBrief IDs and BriefVersion audit history.
     """
-    gate_eval = evaluate_all_gates(db, project)
-    summary = gate_eval["summary"]
+    ctx = load_project_policy_context(db, project)
 
-    query = db.query(KeywordMapping).filter(KeywordMapping.project_id == project.id)
+    query = db.query(KeywordMapping).filter(
+        KeywordMapping.project_id == project.id,
+        KeywordMapping.is_archived == False,  # noqa: E712
+    )
     if mapping_ids:
         query = query.filter(KeywordMapping.id.in_(mapping_ids))
     mappings = query.order_by(KeywordMapping.priority.asc(), KeywordMapping.created_at.asc()).all()
 
     if not mappings:
-        raise ValueError("Chưa có Keyword Mapping nào. Vui lòng hoàn thành Bước 06 trước khi tạo Content Brief.")
-
-    if not allow_draft and not summary["can_generate_official_brief"]:
-        raise ValueError(
-            "Chưa đạt đủ Quality Gates để tạo Content Brief CHÍNH THỨC (cần Keyword Mapping đã phê duyệt, có bằng chứng Semrush và ORGANIC_RESULTS)."
+        raise BriefEligibilityError(
+            {
+                "code": "NO_KEYWORD_MAPPINGS",
+                "reason": "Chưa có Keyword Mapping hợp lệ nào để tạo Content Brief.",
+                "impact": "Không thể sinh Content Brief khi chưa lập kế hoạch từ khóa.",
+                "solution": "Hoàn thành Bước 06 (Lập Keyword Mapping) trước khi tạo Brief.",
+                "next_action": "Mở Bước 06 để lập Keyword Mapping.",
+                "cta_label": "Mở Bước 06",
+                "cta_href": "/steps/06-mapping",
+            }
         )
+
+    decisions = {km.id: evaluate_mapping_eligibility(project, km, ctx) for km in mappings}
+    eligible_list = [km for km in mappings if decisions[km.id]["eligible_official"]]
+    ineligible_list = [km for km in mappings if not decisions[km.id]["eligible_official"]]
+
+    if not allow_draft:
+        # Strict mode: if explicit mapping_ids included any ineligible item OR none are eligible -> FAIL CLOSED!
+        if (mapping_ids and ineligible_list) or not eligible_list:
+            first_bad = ineligible_list[0] if ineligible_list else mappings[0]
+            first_blockers = decisions[first_bad.id]["blockers"]
+            primary_blocker = first_blockers[0] if first_blockers else {
+                "code": "BRIEF_NOT_ELIGIBLE",
+                "reason": f"Mapping '{first_bad.primary_keyword}' chưa đạt đủ Quality Gates để tạo Brief CHÍNH THỨC.",
+                "impact": "Không được phép phát hành Brief chính thức khi còn gate chưa đạt.",
+                "solution": "Hoàn thiện bằng chứng SERP, chỉ số Semrush và phê duyệt phiên bản Mapping hiện tại.",
+                "next_action": "Xem chi tiết điểm nghẽn từng Mapping tại Bước 06.",
+                "cta_label": "Mở Bước 06",
+                "cta_href": "/steps/06-mapping",
+            }
+            raise BriefEligibilityError(
+                {
+                    **primary_blocker,
+                    "ineligible_mappings": [
+                        {
+                            "mapping_id": km.id,
+                            "primary_keyword": km.primary_keyword,
+                            "blockers": decisions[km.id]["blockers"],
+                        }
+                        for km in ineligible_list
+                    ],
+                }
+            )
 
     created_or_updated: list[ContentBrief] = []
     project_tag = (project.topic_pillar_code or project.code or "PRJ").upper()
 
     for idx, km in enumerate(mappings, start=1):
-        is_official = bool(km.is_approved and summary["serp_verified"] and km.volume is not None)
+        dec = decisions[km.id]
+        is_official = bool(dec["eligible_official"])
         if not is_official and not allow_draft:
             continue
 
         brief_mode = "OFFICIAL" if is_official else "DRAFT"
-        status = "READY_FOR_BRIEF" if is_official else ("SERP_NOT_VERIFIED" if not summary["serp_verified"] else "PENDING_APPROVAL")
+        status = "READY_FOR_BRIEF" if is_official else dec["recommended_content_status"]
         br_code = f"BR-{project_tag}-{idx:02d}"
         secondary_kws = json.loads(km.secondary_keywords_json or "[]")
-        writing_strategy = _select_writing_strategy(km, project)
+        writing_strategy = _select_writing_strategy(km)
+        serp_ev = dec["serp_evidence"]
 
         metrics_obj = {
             "volume": km.volume,
             "kd": km.kd,
             "intent": km.intent,
             "metrics_source": km.metrics_source,
-            "serp_status": km.serp_status,
+            "metrics_evidence_id": km.metrics_evidence_id,
+            "serp_tier": dec["serp_tier"],
+            "top10_verified": dec["top10_verified"],
+            "valid_organic_urls": serp_ev["valid_organic_count"],
+            "serp_batch_ids": serp_ev["batch_ids"],
             "market": project.market,
+            "policy_version": POLICY_VERSION,
         }
 
-        intent_status = "VERIFIED" if (km.intent and summary["serp_verified"]) else "ASSUMED"
-        intent_summary = (
-            f"{km.intent} (đã đối chiếu ORGANIC_RESULTS)"
-            if intent_status == "VERIFIED"
-            else f"{km.intent or 'Informational'} — GIẢ ĐỊNH (SERP_NOT_VERIFIED, chưa kiểm chứng URL top đầu)"
-        )
+        if serp_ev["serp_sufficient"]:
+            intent_status = "VERIFIED"
+            if dec["top10_verified"]:
+                intent_summary = (
+                    f"{km.intent or 'Đối chiếu SERP'} — Top 10 SERP đã kiểm chứng đầy đủ "
+                    f"({serp_ev['valid_organic_count']} URL organic hợp lệ, thị trường {project.market})."
+                )
+            else:
+                intent_summary = (
+                    f"{km.intent or 'Đối chiếu SERP'} — Đã kiểm chứng {serp_ev['valid_organic_count']} URL organic "
+                    f"(chưa đủ Top 10 hoàn chỉnh; thiếu vị trí {serp_ev['top10_positions_missing']})."
+                )
+        else:
+            intent_status = "ASSUMED"
+            intent_summary = (
+                f"{km.intent or 'Informational'} — GIẢ ĐỊNH ({dec['serp_tier']}: {serp_ev['sufficiency_reason']})"
+            )
 
         audience = project.target_audience or "Chưa khai báo đối tượng độc giả ở Bước 01 (cần bổ sung)."
         goal = (
@@ -198,32 +261,45 @@ def generate_content_briefs(
             },
         ]
 
+        serp_check_note = (
+            f"Đã xác minh Top 10 SERP đầy đủ ({serp_ev['valid_organic_count']} URL organic)."
+            if dec["top10_verified"]
+            else (
+                f"Đã đối chiếu {serp_ev['valid_organic_count']} URL organic (chưa đủ Top 10 hoàn chỉnh)."
+                if serp_ev["serp_sufficient"]
+                else f"LƯU Ý DỰ THẢO ({dec['serp_tier']}): Chưa đủ bằng chứng SERP — không tuyên bố đã kiểm tra Top 10."
+            )
+        )
         checklist = [
             f"Từ khóa chính '{km.primary_keyword}' xuất hiện tự nhiên ở Title, H1, URL và đoạn mở đầu.",
             "Không bịa số liệu thống kê, quy định hoặc case study chưa có nguồn kiểm chứng.",
             "Biến thể từ khóa phụ được lồng ghép tự nhiên theo ngữ nghĩa, không nhồi nhét.",
             "Bố cục rõ ràng, câu ngắn chủ động, có bảng/ví dụ ngắt nhịp khi thực sự hữu ích.",
             "CTA cuối bài phù hợp mục tiêu kinh doanh và trạng thái nhận thức của người đọc.",
-            (
-                "Đã xác minh dạng trang qua ORGANIC_RESULTS."
-                if summary["serp_verified"]
-                else "LƯU Ý DỰ THẢO (SERP_NOT_VERIFIED): Rà soát lại dạng trang thực tế trước khi xuất bản."
-            ),
+            serp_check_note,
         ]
 
         internal_links = [
             {
                 "anchor": project.topic_pillar_name or project.main_topic or project.name,
-                "target_url": f"/{project.topic_pillar_code.lower() or 'topic-pillar'}",
+                "target_url": f"/{(project.topic_pillar_code or project.code or 'topic-pillar').lower()}",
                 "reason": "Điều hướng về trang Topic Pillar trung tâm để củng cố cấu trúc cụm chủ đề.",
             }
         ]
 
+        # Match existing brief by stable keyword_mapping_id first, then fallback to br_code
         existing = (
             db.query(ContentBrief)
-            .filter(ContentBrief.project_id == project.id, ContentBrief.br_code == br_code)
+            .filter(ContentBrief.project_id == project.id, ContentBrief.keyword_mapping_id == km.id)
             .first()
         )
+        if existing is None:
+            existing = (
+                db.query(ContentBrief)
+                .filter(ContentBrief.project_id == project.id, ContentBrief.br_code == br_code)
+                .first()
+            )
+
         if existing:
             brief = existing
             brief.version += 1
@@ -232,6 +308,22 @@ def generate_content_briefs(
             db.add(brief)
 
         brief.keyword_mapping_id = km.id
+        brief.mapping_revision = km.revision
+        brief.mapping_fingerprint = km.content_fingerprint
+        brief.is_stale = False
+        brief.eligibility_snapshot_json = json.dumps(
+            {
+                "policy_version": POLICY_VERSION,
+                "eligible_official": is_official,
+                "serp_tier": dec["serp_tier"],
+                "top10_verified": dec["top10_verified"],
+                "approval_state": dec["approval_state"],
+                "evidence_refs": dec["evidence_refs"],
+                "blockers": dec["blockers"],
+                "warnings": dec["warnings"],
+            },
+            ensure_ascii=False,
+        )
         brief.content_type = km.page_type
         brief.priority = km.priority
         brief.brief_mode = brief_mode
@@ -263,7 +355,6 @@ def generate_content_briefs(
         )
         db.flush()
 
-        # Save version snapshot
         db.add(
             BriefVersion(
                 brief_id=brief.id,
@@ -275,10 +366,11 @@ def generate_content_briefs(
 
     db.commit()
     return {
+        "policy_version": POLICY_VERSION,
         "briefs": [serialize_brief(b) for b in created_or_updated],
         "official_count": len([b for b in created_or_updated if b.brief_mode == "OFFICIAL"]),
         "draft_count": len([b for b in created_or_updated if b.brief_mode != "OFFICIAL"]),
-        "serp_verified": summary["serp_verified"],
+        "serp_verified": any(decisions[km.id]["serp_evidence"]["serp_sufficient"] for km in mappings),
     }
 
 
@@ -287,6 +379,10 @@ def serialize_brief(b: ContentBrief) -> dict[str, Any]:
         "id": b.id,
         "project_id": b.project_id,
         "keyword_mapping_id": b.keyword_mapping_id,
+        "mapping_revision": b.mapping_revision,
+        "mapping_fingerprint": b.mapping_fingerprint,
+        "is_stale": bool(b.is_stale),
+        "eligibility_snapshot": json.loads(b.eligibility_snapshot_json or "{}"),
         "br_code": b.br_code,
         "content_type": b.content_type,
         "priority": b.priority,

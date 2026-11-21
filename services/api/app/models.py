@@ -31,7 +31,7 @@ class Project(Base):
     __tablename__ = "projects"
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("prj"))
-    code: Mapped[str] = mapped_column(String(32), index=True)  # e.g., P01, P08, Z42
+    code: Mapped[str] = mapped_column(String(32), index=True)
     name: Mapped[str] = mapped_column(String(200))
     pillar_name: Mapped[str] = mapped_column(String(200), default="")
     topic_pillar_code: Mapped[str] = mapped_column(String(64), default="")
@@ -115,7 +115,7 @@ class SourceKeyword(Base):
     content_code: Mapped[str] = mapped_column(String(64), default="")
     keyword: Mapped[str] = mapped_column(String(300), index=True)
     keyword_normalized: Mapped[str] = mapped_column(String(300), index=True)
-    role: Mapped[str] = mapped_column(String(32), default="SECONDARY")  # PRIMARY | SECONDARY
+    role: Mapped[str] = mapped_column(String(32), default="SECONDARY")
     is_original: Mapped[bool] = mapped_column(Boolean, default=True)
     source_ref: Mapped[str] = mapped_column(String(160), default="")
     source_file: Mapped[str] = mapped_column(String(255), default="")
@@ -141,7 +141,7 @@ class ProjectEvent(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("evt"))
     project_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
-    level: Mapped[str] = mapped_column(String(24), default="INFO")  # INFO | WARNING | ERROR | SUCCESS
+    level: Mapped[str] = mapped_column(String(24), default="INFO")
     event_type: Mapped[str] = mapped_column(String(80), index=True)
     message: Mapped[str] = mapped_column(Text)
     details_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -154,7 +154,7 @@ class WorkflowStep(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("stp"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    step_number: Mapped[int] = mapped_column(Integer)  # 1..7
+    step_number: Mapped[int] = mapped_column(Integer)
     step_key: Mapped[str] = mapped_column(String(64))
     title: Mapped[str] = mapped_column(String(160))
     status: Mapped[str] = mapped_column(String(40), default="NOT_STARTED")
@@ -170,8 +170,8 @@ class DemandGroup(Base):
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     name: Mapped[str] = mapped_column(String(255))
     user_need: Mapped[str] = mapped_column(Text, default="")
-    coverage_type: Mapped[str] = mapped_column(String(40), default="COVERED")  # COVERED | GAP | OVERLAP
-    assumed_page_type: Mapped[str] = mapped_column(String(32), default="UNKNOWN")  # ARTICLE|TOOL|DOWNLOAD|SERVICE|PRODUCT|UNKNOWN
+    coverage_type: Mapped[str] = mapped_column(String(40), default="COVERED")
+    assumed_page_type: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
     assumed_intent: Mapped[str] = mapped_column(String(64), default="UNVERIFIED")
     seed_keywords_json: Mapped[str] = mapped_column(Text, default="[]")
     related_keywords_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -199,7 +199,7 @@ class KeywordCandidate(Base):
     demand_group_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("demand_groups.id", ondelete="SET NULL"), nullable=True)
     keyword: Mapped[str] = mapped_column(String(300))
     keyword_normalized: Mapped[str] = mapped_column(String(300), index=True)
-    candidate_type: Mapped[str] = mapped_column(String(32), default="SEED_PROPOSAL")  # SEED_PROPOSAL | EXPANSION | PRIMARY_CHANGE
+    candidate_type: Mapped[str] = mapped_column(String(32), default="SEED_PROPOSAL")
     assumed_page_type: Mapped[str] = mapped_column(String(32), default="UNKNOWN")
     source_refs_json: Mapped[str] = mapped_column(Text, default="[]")
     source_ref_valid: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -213,7 +213,7 @@ class AIRun(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("air"))
     project_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), nullable=True, index=True)
-    role: Mapped[str] = mapped_column(String(40))  # ANALYST | CRITIC_PRE | CRITIC_POST | BRIEF | TEST_CONNECTION
+    role: Mapped[str] = mapped_column(String(40))
     provider: Mapped[str] = mapped_column(String(40))
     requested_model: Mapped[str] = mapped_column(String(120), default="")
     actual_model: Mapped[str] = mapped_column(String(120), default="")
@@ -235,7 +235,7 @@ class Critique(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("crt"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     ai_run_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("ai_runs.id", ondelete="SET NULL"), nullable=True)
-    stage: Mapped[str] = mapped_column(String(32), default="PRE_SEMRUSH")  # PRE_SEMRUSH | POST_SEMRUSH
+    stage: Mapped[str] = mapped_column(String(32), default="PRE_SEMRUSH")
     research_cycle: Mapped[int] = mapped_column(Integer, default=1)
     round_number: Mapped[int] = mapped_column(Integer, default=1)
     supporting_evidence_json: Mapped[str] = mapped_column(Text, default="[]")
@@ -255,14 +255,14 @@ class ResearchRequest(Base):
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     demand_group_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("demand_groups.id", ondelete="SET NULL"), nullable=True)
     seed_keyword: Mapped[str] = mapped_column(String(300))
-    report_type: Mapped[str] = mapped_column(String(40))  # KEYWORD_OVERVIEW | RELATED | QUESTIONS | ORGANIC_RESULTS
+    report_type: Mapped[str] = mapped_column(String(40))
     market: Mapped[str] = mapped_column(String(32), default="VN")
     purpose: Mapped[str] = mapped_column(Text, default="")
     expected_columns_json: Mapped[str] = mapped_column(Text, default="[]")
     semrush_steps_json: Mapped[str] = mapped_column(Text, default="[]")
     research_cycle: Mapped[int] = mapped_column(Integer, default=1)
-    origin: Mapped[str] = mapped_column(String(32), default="ANALYST")  # ANALYST | CRITIC_FOLLOWUP | MANUAL
-    status: Mapped[str] = mapped_column(String(40), default="WAITING_USER")  # WAITING_USER|FILE_RECEIVED|MAPPING_REQUIRED|IMPORTED|ERROR
+    origin: Mapped[str] = mapped_column(String(32), default="ANALYST")
+    status: Mapped[str] = mapped_column(String(40), default="WAITING_USER")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -273,7 +273,7 @@ class FileUpload(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("upl"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     research_request_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("research_requests.id", ondelete="SET NULL"), nullable=True)
-    purpose: Mapped[str] = mapped_column(String(40), default="SEMRUSH_IMPORT")  # TOPIC_SOURCE | SEMRUSH_IMPORT
+    purpose: Mapped[str] = mapped_column(String(40), default="SEMRUSH_IMPORT")
     filename: Mapped[str] = mapped_column(String(255))
     stored_path: Mapped[str] = mapped_column(String(500))
     sha256: Mapped[str] = mapped_column(String(64), index=True)
@@ -284,7 +284,7 @@ class FileUpload(Base):
     delimiter: Mapped[str] = mapped_column(String(8), default=",")
     locale: Mapped[str] = mapped_column(String(16), default="en-US")
     row_count_total: Mapped[int] = mapped_column(Integer, default=0)
-    status: Mapped[str] = mapped_column(String(40), default="PREVIEWED")  # PREVIEWED | CONFIRMED | ERROR
+    status: Mapped[str] = mapped_column(String(40), default="PREVIEWED")
     preview_meta_json: Mapped[str] = mapped_column(Text, default="{}")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
@@ -319,7 +319,7 @@ class EvidenceRow(Base):
     source_row_number: Mapped[int] = mapped_column(Integer, default=1)
     keyword: Mapped[str] = mapped_column(String(300), default="", index=True)
     keyword_normalized: Mapped[str] = mapped_column(String(300), default="", index=True)
-    volume: Mapped[int | None] = mapped_column(Integer, nullable=True)  # NULL != 0!
+    volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kd: Mapped[float | None] = mapped_column(Float, nullable=True)
     intent: Mapped[str | None] = mapped_column(String(120), nullable=True)
     cpc: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -329,6 +329,10 @@ class EvidenceRow(Base):
     organic_position: Mapped[int | None] = mapped_column(Integer, nullable=True)
     organic_title: Mapped[str | None] = mapped_column(Text, nullable=True)
     organic_page_type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # V1.6.1 SERP provenance fields
+    serp_result_type: Mapped[str] = mapped_column(String(40), default="ORGANIC")  # ORGANIC | AI_OVERVIEW | NON_ORGANIC
+    organic_domain: Mapped[str] = mapped_column(String(255), default="")
+    organic_valid: Mapped[bool] = mapped_column(Boolean, default=True)
     market: Mapped[str] = mapped_column(String(32), default="VN")
     is_duplicate: Mapped[bool] = mapped_column(Boolean, default=False)
     raw_row_json: Mapped[str] = mapped_column(Text, default="{}")
@@ -344,7 +348,7 @@ class KeywordEvidenceLink(Base):
     source_keyword_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("source_keywords.id", ondelete="SET NULL"), nullable=True)
     evidence_row_id: Mapped[str] = mapped_column(String(40), ForeignKey("evidence_rows.id", ondelete="CASCADE"), index=True)
     keyword_normalized: Mapped[str] = mapped_column(String(300), index=True)
-    match_type: Mapped[str] = mapped_column(String(32), default="EXACT")  # EXACT | NORMALIZED | CANDIDATE
+    match_type: Mapped[str] = mapped_column(String(32), default="EXACT")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
@@ -354,9 +358,9 @@ class QualityGate(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("qg"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    gate_code: Mapped[str] = mapped_column(String(16))  # F0, E0, E1, E2, F1, F2, F3, F4, F5, F6, F7
+    gate_code: Mapped[str] = mapped_column(String(16))
     gate_name: Mapped[str] = mapped_column(String(160))
-    status: Mapped[str] = mapped_column(String(40), default="NOT_STARTED")  # PASSED|WARNING|FAILED|HOLD|NOT_STARTED
+    status: Mapped[str] = mapped_column(String(40), default="NOT_STARTED")
     details_json: Mapped[str] = mapped_column(Text, default="{}")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -366,16 +370,18 @@ class Approval(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("apr"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    approval_type: Mapped[str] = mapped_column(String(48))  # PRIMARY_KEYWORD_CHANGE | NEW_TOPIC_PROPOSAL | OVERLAP_MERGE_SPLIT | FINAL_MAPPING | RESEARCH_CONTINUE
+    approval_type: Mapped[str] = mapped_column(String(48))
     target_ref: Mapped[str] = mapped_column(String(120), default="")
+    target_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    target_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     title: Mapped[str] = mapped_column(String(255))
     original_value: Mapped[str] = mapped_column(Text, default="")
     proposed_value: Mapped[str] = mapped_column(Text, default="")
     rationale: Mapped[str] = mapped_column(Text, default="")
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     impact: Mapped[str] = mapped_column(Text, default="")
-    scope: Mapped[str] = mapped_column(String(32), default="BRIEF_ELIGIBILITY")  # RESEARCH_ONLY | BRIEF_ELIGIBILITY
-    status: Mapped[str] = mapped_column(String(32), default="PENDING")  # PENDING | APPROVED | REJECTED | NEED_MORE_EVIDENCE
+    scope: Mapped[str] = mapped_column(String(32), default="BRIEF_ELIGIBILITY")
+    status: Mapped[str] = mapped_column(String(32), default="PENDING")  # PENDING|APPROVED|REJECTED|NEED_MORE_EVIDENCE|SUPERSEDED
     decision_note: Mapped[str] = mapped_column(Text, default="")
     decided_by: Mapped[str] = mapped_column(String(120), default="")
     version: Mapped[int] = mapped_column(Integer, default=1)
@@ -389,26 +395,46 @@ class KeywordMapping(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("map"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     demand_group_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("demand_groups.id", ondelete="SET NULL"), nullable=True)
+    logical_key: Mapped[str] = mapped_column(String(200), default="", index=True)
     revision: Mapped[int] = mapped_column(Integer, default=1)
+    content_fingerprint: Mapped[str] = mapped_column(String(64), default="")
     primary_keyword: Mapped[str] = mapped_column(String(300))
     secondary_keywords_json: Mapped[str] = mapped_column(Text, default="[]")
-    page_type: Mapped[str] = mapped_column(String(32), default="ARTICLE")  # ARTICLE|TOOL|DOWNLOAD|SERVICE|PRODUCT|UNKNOWN
+    page_type: Mapped[str] = mapped_column(String(32), default="ARTICLE")
     proposed_url: Mapped[str] = mapped_column(String(300), default="")
     volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
     kd: Mapped[float | None] = mapped_column(Float, nullable=True)
     intent: Mapped[str | None] = mapped_column(String(120), nullable=True)
     metrics_source: Mapped[str] = mapped_column(String(255), default="")
-    priority: Mapped[str] = mapped_column(String(24), default="P2")  # P1 | P2 | P3
+    metrics_evidence_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    priority: Mapped[str] = mapped_column(String(24), default="P2")
     business_value: Mapped[str] = mapped_column(String(32), default="MEDIUM")
     effort: Mapped[str] = mapped_column(String(32), default="MEDIUM")
     merge_split_proposal: Mapped[str] = mapped_column(Text, default="")
     serp_status: Mapped[str] = mapped_column(String(40), default="SERP_NOT_VERIFIED")
+    serp_evidence_summary_json: Mapped[str] = mapped_column(Text, default="{}")
     content_status: Mapped[str] = mapped_column(String(40), default="SERP_NOT_VERIFIED")
     evidence_json: Mapped[str] = mapped_column(Text, default="[]")
     is_approved: Mapped[bool] = mapped_column(Boolean, default=False)
+    approved_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    approved_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    is_archived: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class MappingRevision(Base):
+    """Immutable audit trail of every KeywordMapping revision & content fingerprint."""
+    __tablename__ = "mapping_revisions"
+
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("mrev"))
+    project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    keyword_mapping_id: Mapped[str] = mapped_column(String(40), ForeignKey("keyword_mappings.id", ondelete="CASCADE"), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    content_fingerprint: Mapped[str] = mapped_column(String(64))
+    payload_json: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
 class ArticleOpportunity(Base):
@@ -418,7 +444,7 @@ class ArticleOpportunity(Base):
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     keyword_mapping_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("keyword_mappings.id", ondelete="SET NULL"), nullable=True)
     demand_group_name: Mapped[str] = mapped_column(String(255))
-    opportunity_kind: Mapped[str] = mapped_column(String(32), default="ARTICLE_OPPORTUNITY")  # ARTICLE_OPPORTUNITY | NON_ARTICLE_ASSET | RESEARCH_GAP
+    opportunity_kind: Mapped[str] = mapped_column(String(32), default="ARTICLE_OPPORTUNITY")
     page_type: Mapped[str] = mapped_column(String(32), default="ARTICLE")
     counts_toward_article_quota: Mapped[bool] = mapped_column(Boolean, default=True)
     title_suggestion: Mapped[str] = mapped_column(String(300), default="")
@@ -436,17 +462,21 @@ class ContentBrief(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("br"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     keyword_mapping_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("keyword_mappings.id", ondelete="SET NULL"), nullable=True)
-    br_code: Mapped[str] = mapped_column(String(40))  # e.g., BR-P01-01
+    mapping_revision: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mapping_fingerprint: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_stale: Mapped[bool] = mapped_column(Boolean, default=False)
+    eligibility_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    br_code: Mapped[str] = mapped_column(String(40))
     content_type: Mapped[str] = mapped_column(String(32), default="ARTICLE")
     priority: Mapped[str] = mapped_column(String(24), default="P1")
-    brief_mode: Mapped[str] = mapped_column(String(24), default="DRAFT")  # OFFICIAL | DRAFT
+    brief_mode: Mapped[str] = mapped_column(String(24), default="DRAFT")
     status: Mapped[str] = mapped_column(String(40), default="SERP_NOT_VERIFIED")
     primary_keyword: Mapped[str] = mapped_column(String(300))
     secondary_keywords_json: Mapped[str] = mapped_column(Text, default="[]")
     metrics_json: Mapped[str] = mapped_column(Text, default="{}")
     proposed_url: Mapped[str] = mapped_column(String(300), default="")
     target_audience: Mapped[str] = mapped_column(Text, default="")
-    search_intent_status: Mapped[str] = mapped_column(String(40), default="ASSUMED")  # ASSUMED | VERIFIED
+    search_intent_status: Mapped[str] = mapped_column(String(40), default="ASSUMED")
     search_intent_summary: Mapped[str] = mapped_column(Text, default="")
     article_goal: Mapped[str] = mapped_column(Text, default="")
     seo_title: Mapped[str] = mapped_column(String(300), default="")
@@ -477,7 +507,7 @@ class ExportRecord(Base):
 
     id: Mapped[str] = mapped_column(String(40), primary_key=True, default=lambda: new_id("exp"))
     project_id: Mapped[str] = mapped_column(String(40), ForeignKey("projects.id", ondelete="CASCADE"), index=True)
-    export_format: Mapped[str] = mapped_column(String(24))  # xlsx | csv | json | html
+    export_format: Mapped[str] = mapped_column(String(24))
     filename: Mapped[str] = mapped_column(String(255))
     stored_path: Mapped[str] = mapped_column(String(500))
     brief_mode: Mapped[str] = mapped_column(String(24), default="DRAFT")
@@ -488,25 +518,23 @@ class AIProviderSetting(Base):
     """Stores ONLY non-secret metadata and secret_ref. NEVER plaintext API keys!"""
     __tablename__ = "ai_provider_settings"
 
-    provider: Mapped[str] = mapped_column(String(32), primary_key=True)  # openai | gemini | claude | mock
+    provider: Mapped[str] = mapped_column(String(32), primary_key=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=False)
     secret_ref: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    secret_storage_mode: Mapped[str] = mapped_column(String(32), default="none")  # keyring | env | memory | none
-    key_hint: Mapped[str | None] = mapped_column(String(24), nullable=True)  # e.g. ****7a9b
+    secret_storage_mode: Mapped[str] = mapped_column(String(32), default="none")
+    key_hint: Mapped[str | None] = mapped_column(String(24), nullable=True)
     model_id: Mapped[str] = mapped_column(String(120), default="")
     active_model_id: Mapped[str] = mapped_column(String(120), default="")
     use_shared_model: Mapped[bool] = mapped_column(Boolean, default=True)
     analyst_model_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     critic_model_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     endpoint_url: Mapped[str] = mapped_column(String(300), default="")
-    # Gemini auto-latest & 3-error automatic downgrade tracking
     auto_latest: Mapped[bool] = mapped_column(Boolean, default=True)
     downgrade_threshold: Mapped[int] = mapped_column(Integer, default=3)
     fallback_chain_json: Mapped[str] = mapped_column(Text, default="[]")
     failure_counts_json: Mapped[str] = mapped_column(Text, default="{}")
     last_downgrade_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_downgrade_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    # Connection test status
     connection_status: Mapped[str] = mapped_column(String(32), default="NOT_CONFIGURED")
     last_tested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

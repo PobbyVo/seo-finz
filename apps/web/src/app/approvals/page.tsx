@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Check, ClipboardCheck, HelpCircle, X } from 'lucide-react';
 import { useProject } from '@/context/ProjectContext';
@@ -15,20 +15,25 @@ export default function ApprovalsPage() {
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<StandardizedError | null>(null);
+  const currentPidRef = useRef<string | null>(null);
+  currentPidRef.current = activeProject?.id ?? null;
 
   const loadApprovals = useCallback(async () => {
     if (!activeProject) return;
+    const reqPid = activeProject.id;
     try {
       const data = await apiRequest<{ approvals: ApprovalItem[] }>(
-        `/api/v1/projects/${activeProject.id}/approvals`
+        `/api/v1/projects/${reqPid}/approvals`
       );
-      setApprovals(data.approvals);
+      if (currentPidRef.current === reqPid) setApprovals(data.approvals);
     } catch (err) {
-      if (err instanceof ApiError && err.structured) setError(err.structured);
+      if (currentPidRef.current === reqPid && err instanceof ApiError && err.structured) setError(err.structured);
     }
   }, [activeProject]);
 
   useEffect(() => {
+    setApprovals([]);
+    setError(null);
     void loadApprovals();
   }, [loadApprovals]);
 
@@ -93,7 +98,11 @@ export default function ApprovalsPage() {
                   </div>
                   <h2 className="text-base font-bold text-slate-100">{a.title}</h2>
                 </div>
-                <span className="font-mono text-xs text-slate-500">v{a.version}</span>
+                <span className="font-mono text-xs text-slate-500">
+                  v{a.version}
+                  {a.target_revision ? ` · map rev #${a.target_revision}` : ''}
+                  {a.target_fingerprint ? ` · fp:${a.target_fingerprint.slice(0, 8)}` : ''}
+                </span>
               </div>
 
               <div className="grid gap-3 md:grid-cols-2 text-xs">

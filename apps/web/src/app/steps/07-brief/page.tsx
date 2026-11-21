@@ -1,16 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { BookOpen, Download, FileSpreadsheet, FileText, Printer, Sparkles } from 'lucide-react';
+import { AlertTriangle, BookOpen, CheckCircle2, Download, FileSpreadsheet, FileText, Printer, Sparkles } from 'lucide-react';
 import { useProject } from '@/context/ProjectContext';
 import { ApiError, apiRequest, downloadExportFile } from '@/lib/api';
-import type { ContentBriefItem, StandardizedError } from '@/lib/types';
+import type { ContentBriefItem, MappingEligibility, StandardizedError } from '@/lib/types';
 import { ErrorBanner } from '@/components/ErrorBanner';
 import { StatusBadge } from '@/components/StatusBadge';
 
+interface MappingEligibilityRow {
+  id: string;
+  primary_keyword: string;
+  page_type: string;
+  revision: number;
+  eligibility: MappingEligibility;
+}
+
 interface BriefsPayload {
   briefs: ContentBriefItem[];
+  mappings_eligibility?: MappingEligibilityRow[];
   writing_formulas_catalog: Array<{ id: string; name: string; description: string }>;
   engagement_tactics_catalog: Array<{ number: number; code: string; text: string }>;
 }
@@ -18,23 +27,41 @@ interface BriefsPayload {
 export default function Step07BriefPage() {
   const { activeProject, refreshProjects } = useProject();
   const [data, setData] = useState<BriefsPayload | null>(null);
+  const [selectedMappingIds, setSelectedMappingIds] = useState<Set<string>>(new Set());
   const [generating, setGenerating] = useState(false);
   const [exporting, setExporting] = useState<string | null>(null);
   const [showCatalog, setShowCatalog] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<StandardizedError | null>(null);
+  const currentPidRef = useRef<string | null>(null);
+  currentPidRef.current = activeProject?.id ?? null;
 
   const loadBriefs = useCallback(async () => {
     if (!activeProject) return;
+    const reqPid = activeProject.id;
     try {
-      const res = await apiRequest<BriefsPayload>(`/api/v1/projects/${activeProject.id}/briefs`);
+      const res = await apiRequest<BriefsPayload>(`/api/v1/projects/${reqPid}/briefs`);
+      if (currentPidRef.current !== reqPid) return;
       setData(res);
+      const eligRows = res.mappings_eligibility || [];
+      setSelectedMappingIds((prev) => {
+        const validIds = new Set(eligRows.map((m) => m.id));
+        const kept = [...prev].filter((id) => validIds.has(id));
+        if (kept.length > 0) return new Set(kept);
+        // Default select eligible mappings if any exist, otherwise all
+        const onlyElig = eligRows.filter((m) => m.eligibility.eligible_official).map((m) => m.id);
+        return new Set(onlyElig.length > 0 ? onlyElig : eligRows.map((m) => m.id));
+      });
     } catch (err) {
-      if (err instanceof ApiError && err.structured) setError(err.structured);
+      if (currentPidRef.current === reqPid && err instanceof ApiError && err.structured) setError(err.structured);
     }
   }, [activeProject]);
 
   useEffect(() => {
+    setData(null);
+    setSelectedMappingIds(new Set());
+    setNotice(null);
+    setError(null);
     void loadBriefs();
   }, [loadBriefs]);
 
@@ -46,26 +73,42 @@ export default function Step07BriefPage() {
     );
   }
 
-  const canOfficial = Boolean(activeProject.workflow?.evidence_summary?.can_generate_official_brief);
+  const eligRows = data?.mappings_eligibility || [];
+  const chosenRows = eligRows.filter((m) => selectedMappingIds.has(m.id));
+  // Strict UI truthfulness: OFFICIAL button enabled ONLY when selected mappings are ALL genuinely eligible_official!
+  const canGenerateOfficialForSelection =
+    chosenRows.length > 0 && chosenRows.every((m) => m.eligibility.eligible_official);
+
+  const toggleMapping = (id: string) => {
+    setSelectedMappingIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const handleGenerate = async (allowDraft: boolean) => {
+    const reqPid = activeProject.id;
     setGenerating(true);
     setError(null);
     setNotice(null);
+    const targetIds = chosenRows.length > 0 ? chosenRows.map((m) => m.id) : null;
     try {
       const res = await apiRequest<{ official_count: number; draft_count: number }>(
-        `/api/v1/projects/${activeProject.id}/briefs/generate`,
-        { method: 'POST', body: JSON.stringify({ allow_draft: allowDraft }) }
+        `/api/v1/projects/${reqPid}/briefs/generate`,
+        { method: 'POST', body: JSON.stringify({ allow_draft: allowDraft, mapping_ids: targetIds }) }
       );
+      if (currentPidRef.current !== reqPid) return;
       setNotice(
         `Đã tạo xong Content Brief: ${res.official_count} bản CHÍNH THỨC, ${res.draft_count} bản DỰ THẢO.`
       );
       await loadBriefs();
-      await refreshProjects(activeProject.id);
+      await refreshProjects(reqPid);
     } catch (err) {
-      if (err instanceof ApiError && err.structured) setError(err.structured);
+      if (currentPidRef.current === reqPid && err instanceof ApiError && err.structured) setError(err.structured);
     } finally {
-      setGenerating(false);
+      if (currentPidRef.current === reqPid) setGenerating(false);
     }
   };
 
@@ -94,29 +137,33 @@ export default function Step07BriefPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Bước 07 — SEO Content Brief & Xuất Deliverables</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Gồm 3 bảng logic (Keyword Overview, Keyword Mapping, SEO Content Brief) + Writing Strategy cấp toàn bài (13 công thức viết & 16 chiến thuật thu hút độc giả).
+            Chỉ phát hành <strong>CHÍNH THỨC</strong> cho từng Mapping đạt đủ Quality Gates & phê duyệt phiên bản hiện hành. Mapping thiếu SERP/KD/Approval luôn giữ nhãn <strong>DỰ THẢO</strong>.
           </p>
         </div>
 
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
-            disabled={generating || !canOfficial}
+            disabled={generating || !canGenerateOfficialForSelection}
             onClick={() => void handleGenerate(false)}
             className="inline-flex items-center gap-2 rounded-xl bg-emerald-500 px-4 py-2.5 text-xs font-semibold text-slate-950 hover:bg-emerald-400 disabled:opacity-40 transition"
-            title={canOfficial ? 'Đủ Quality Gates' : 'Cần phê duyệt Mapping và có ORGANIC_RESULTS để tạo bản CHÍNH THỨC'}
+            title={
+              canGenerateOfficialForSelection
+                ? 'Tất cả Mapping đang chọn đều đạt đủ Quality Gates'
+                : 'Chỉ bật khi toàn bộ Mapping đang chọn đều đạt đủ điều kiện Brief CHÍNH THỨC'
+            }
           >
             <Sparkles className="h-4 w-4" />
-            Tạo Brief CHÍNH THỨC
+            Tạo Brief CHÍNH THỨC ({chosenRows.filter((m) => m.eligibility.eligible_official).length}/{chosenRows.length})
           </button>
           <button
             type="button"
-            disabled={generating}
+            disabled={generating || chosenRows.length === 0}
             onClick={() => void handleGenerate(true)}
             className="inline-flex items-center gap-2 rounded-xl bg-sky-500/20 border border-sky-400/40 px-4 py-2.5 text-xs font-semibold text-sky-200 hover:bg-sky-500/30 disabled:opacity-40 transition"
           >
             <FileText className="h-4 w-4" />
-            {generating ? 'Đang tạo Brief…' : 'Tạo Brief DỰ THẢO (hoặc cập nhật)'}
+            {generating ? 'Đang tạo Brief…' : 'Tạo Brief DỰ THẢO / Hỗn hợp'}
           </button>
           <button
             type="button"
@@ -134,12 +181,60 @@ export default function Step07BriefPage() {
         <div className="rounded-xl border border-emerald-500/35 bg-emerald-950/25 p-3.5 text-xs text-emerald-200">{notice}</div>
       )}
 
+      {/* Per-Mapping Selection & Eligibility Gate Panel */}
+      {eligRows.length > 0 && (
+        <section className="rounded-2xl border border-slate-800 bg-surface-900 p-4 space-y-3">
+          <div className="text-xs font-bold uppercase tracking-wider text-slate-300">
+            Chọn Mapping để tạo Content Brief (Kiểm tra điều kiện theo từng từ khóa)
+          </div>
+          <div className="grid gap-2.5 md:grid-cols-2">
+            {eligRows.map((m) => {
+              const ok = m.eligibility.eligible_official;
+              return (
+                <label
+                  key={m.id}
+                  className={`flex items-start gap-2.5 rounded-xl border p-3 text-xs cursor-pointer transition ${
+                    selectedMappingIds.has(m.id)
+                      ? 'border-sky-500/50 bg-sky-950/20'
+                      : 'border-slate-800 bg-surface-850'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedMappingIds.has(m.id)}
+                    onChange={() => toggleMapping(m.id)}
+                    className="mt-0.5 h-4 w-4 rounded"
+                  />
+                  <div className="space-y-1 min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <strong className="text-slate-100">{m.primary_keyword}</strong>
+                      <span className="font-mono text-[11px] text-slate-400">rev #{m.revision}</span>
+                      <StatusBadge status={m.eligibility.serp_tier} />
+                      {m.eligibility.approval_state === 'STALE_SUPERSEDED' && <StatusBadge status="STALE_SUPERSEDED" />}
+                    </div>
+                    {ok ? (
+                      <div className="inline-flex items-center gap-1 text-emerald-300">
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Đủ điều kiện phát hành CHÍNH THỨC
+                      </div>
+                    ) : (
+                      <div className="text-amber-200/90">
+                        Chỉ xuất DỰ THẢO — Chặn bởi: {m.eligibility.blockers.map((b) => b.code).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                </label>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
       {/* Export Bar */}
       <section className="rounded-2xl border border-slate-800 bg-surface-900 p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-slate-300">
           <strong className="text-slate-100">Xuất tệp cục bộ:</strong> XLSX chứa đúng 3 sheet (<code className="text-sky-300">Keyword Overview</code>,{' '}
           <code className="text-sky-300">Keyword Mapping</code>, <code className="text-sky-300">SEO Content Brief</code>) đặt tên theo dự án{' '}
-          <strong className="text-white">{activeProject.code}</strong>.
+          <strong className="text-white">{activeProject.code}</strong> kèm nhãn xác minh trung thực.
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -211,6 +306,15 @@ export default function Step07BriefPage() {
         <div className="space-y-5">
           {data.briefs.map((b) => (
             <article key={b.id} className="rounded-2xl border border-slate-800 bg-surface-900 p-6 space-y-5">
+              {b.is_stale && (
+                <div className="rounded-xl border border-rose-500/40 bg-rose-950/30 p-3 text-xs text-rose-200 flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-rose-400 shrink-0" />
+                  <span>
+                    <strong>Brief đã cũ (STALE):</strong> Mapping hoặc bằng chứng gốc đã thay đổi sau khi tạo bản này. Hãy phê duyệt phiên bản mới và tạo lại Brief.
+                  </span>
+                </div>
+              )}
+
               <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-800 pb-4">
                 <div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -221,7 +325,7 @@ export default function Step07BriefPage() {
                       {b.content_type}
                     </span>
                     <span className="rounded bg-slate-800 px-2 py-0.5 font-mono text-xs text-slate-300">
-                      {b.priority} · v{b.version}
+                      {b.priority} · brief v{b.version} {b.mapping_revision ? `· map rev #${b.mapping_revision}` : ''}
                     </span>
                   </div>
                   <h2 className="mt-2 text-lg font-bold text-slate-100">{b.seo_title}</h2>
@@ -241,7 +345,7 @@ export default function Step07BriefPage() {
                   <p><strong className="text-slate-300">Độc giả mục tiêu:</strong> {b.target_audience}</p>
                   <p><strong className="text-slate-300">Mục tiêu bài viết:</strong> {b.article_goal}</p>
                   <p><strong className="text-slate-300">CTA:</strong> {b.cta}</p>
-                  <p><strong className="text-slate-300">Metrics & Nguồn:</strong> <code className="text-slate-200">{JSON.stringify(b.metrics)}</code></p>
+                  <p><strong className="text-slate-300">Metrics & Nguồn:</strong> <code className="text-slate-200 break-all">{JSON.stringify(b.metrics)}</code></p>
                 </div>
               </div>
 

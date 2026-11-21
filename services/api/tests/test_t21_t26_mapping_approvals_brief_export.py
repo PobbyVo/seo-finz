@@ -79,12 +79,18 @@ def test_t22_t23_t24_t25_t26_mapping_approvals_brief_and_xlsx_export(client):
     assert first_draft["status"] == "SERP_NOT_VERIFIED"
     assert first_draft["search_intent_status"] == "ASSUMED"
 
-    # Now upload ORGANIC_RESULTS AND approve mappings -> OFFICIAL brief succeeds!
+    # Now upload sufficient ORGANIC_RESULTS (>=3 ranked organic URLs per keyword) AND approve mappings -> OFFICIAL brief succeeds!
     org_csv = (
         "Keyword,Position,URL,Title\n"
-        "quản trị dòng tiền,1,https://finz.vn/blog/quan-tri-dong-tien,Quản trị dòng tiền SME\n"
-        "cách xử lý quản trị dòng tiền,1,https://finz.vn/blog/xu-ly-dong-tien,Cách xử lý dòng tiền\n"
-        "công cụ tính dòng tiền,1,https://finz.vn/cong-cu/tinh-dong-tien,Công cụ tính dòng tiền\n"
+        "quản trị dòng tiền,1,https://finz.vn/blog/quan-tri-dong-tien-1,Quản trị dòng tiền SME\n"
+        "quản trị dòng tiền,2,https://finz.vn/blog/quan-tri-dong-tien-2,Hướng dẫn dòng tiền\n"
+        "quản trị dòng tiền,3,https://finz.vn/blog/quan-tri-dong-tien-3,Kiểm soát dòng tiền\n"
+        "cách xử lý quản trị dòng tiền,1,https://finz.vn/blog/xu-ly-dong-tien-1,Cách xử lý dòng tiền\n"
+        "cách xử lý quản trị dòng tiền,2,https://finz.vn/blog/xu-ly-dong-tien-2,Xử lý thiếu hụt dòng tiền\n"
+        "cách xử lý quản trị dòng tiền,3,https://finz.vn/blog/xu-ly-dong-tien-3,Giải pháp dòng tiền SME\n"
+        "công cụ tính dòng tiền,1,https://finz.vn/cong-cu/tinh-dong-tien-1,Công cụ tính dòng tiền\n"
+        "công cụ tính dòng tiền,2,https://finz.vn/cong-cu/tinh-dong-tien-2,Calculator dòng tiền\n"
+        "công cụ tính dòng tiền,3,https://finz.vn/cong-cu/tinh-dong-tien-3,Công cụ lập dòng tiền\n"
     ).encode("utf-8")
     p2 = tc.post(
         f"/api/v1/projects/{pid}/imports/preview",

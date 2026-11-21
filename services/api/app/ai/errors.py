@@ -158,6 +158,7 @@ def sanitize_secret_text(text: str) -> str:
     import re
 
     patterns = [
+        r"AQ\.[0-9A-Za-z\-_]{16,}",
         r"AIza[0-9A-Za-z\-_]{20,}",
         r"sk-ant-[0-9A-Za-z\-_]{16,}",
         r"sk-proj-[0-9A-Za-z\-_]{16,}",

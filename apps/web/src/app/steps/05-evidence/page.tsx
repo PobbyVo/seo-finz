@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
   CheckCircle2,
@@ -58,18 +58,24 @@ export default function Step05EvidencePage() {
   const [approvingFu, setApprovingFu] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<StandardizedError | null>(null);
+  const currentPidRef = useRef<string | null>(null);
+  currentPidRef.current = activeProject?.id ?? null;
 
   const loadEvidence = useCallback(async () => {
     if (!activeProject) return;
+    const reqPid = activeProject.id;
     try {
-      const res = await apiRequest<EvidencePayload>(`/api/v1/projects/${activeProject.id}/evidence?limit=250`);
-      setData(res);
+      const res = await apiRequest<EvidencePayload>(`/api/v1/projects/${reqPid}/evidence?limit=250`);
+      if (currentPidRef.current === reqPid) setData(res);
     } catch (err) {
-      if (err instanceof ApiError && err.structured) setError(err.structured);
+      if (currentPidRef.current === reqPid && err instanceof ApiError && err.structured) setError(err.structured);
     }
   }, [activeProject]);
 
   useEffect(() => {
+    setData(null);
+    setNotice(null);
+    setError(null);
     void loadEvidence();
   }, [loadEvidence]);
 
@@ -393,23 +399,37 @@ export default function Step05EvidencePage() {
               <tr>
                 <th scope="col">Keyword</th>
                 <th scope="col">Vị trí</th>
-                <th scope="col">Loại trang</th>
+                <th scope="col">Loại kết quả & Hợp lệ</th>
+                <th scope="col">Loại trang (giả định)</th>
                 <th scope="col">URL</th>
-                <th scope="col">Tiêu đề</th>
+                <th scope="col">Tiêu đề / Domain</th>
               </tr>
             </thead>
             <tbody>
               {visibleRows.map((r) => (
-                <tr key={r.id}>
+                <tr key={r.id} className={r.organic_valid === false || r.is_duplicate ? 'opacity-60' : ''}>
                   <th scope="row">{r.keyword || '—'}</th>
                   <td data-label="Vị trí" className="font-mono">#{r.organic_position ?? '—'}</td>
+                  <td data-label="Loại kết quả" className="text-xs space-y-1">
+                    <span
+                      className={`rounded px-2 py-0.5 font-mono text-[11px] font-semibold ${
+                        (r.serp_result_type || 'ORGANIC') === 'ORGANIC'
+                          ? 'bg-emerald-500/20 text-emerald-200'
+                          : 'bg-amber-500/20 text-amber-200'
+                      }`}
+                    >
+                      {r.serp_result_type || 'ORGANIC'}
+                    </span>
+                    {r.organic_valid === false && <div className="text-[11px] text-amber-300">Loại khỏi Organic rank</div>}
+                    {r.is_duplicate && <div className="text-[11px] text-amber-300">Trùng URL</div>}
+                  </td>
                   <td data-label="Loại trang">
                     <span className="rounded bg-violet-500/20 px-2 py-0.5 text-xs font-semibold text-violet-200">
                       {r.organic_page_type || 'UNKNOWN'}
                     </span>
                   </td>
                   <td data-label="URL" className="font-mono text-xs text-sky-300 break-all">{r.organic_url}</td>
-                  <td data-label="Tiêu đề" className="text-xs">{r.organic_title || '—'}</td>
+                  <td data-label="Tiêu đề" className="text-xs">{r.organic_title || r.organic_domain || '—'}</td>
                 </tr>
               ))}
             </tbody>

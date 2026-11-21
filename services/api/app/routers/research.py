@@ -20,6 +20,7 @@ from app.domain.semrush_parser import (
     suggest_column_mapping,
 )
 from app.domain.workflow import SEMRUSH_REPORT_GUIDES, refresh_workflow_state
+from app.security.upload_guard import build_unique_upload_path, read_bounded_upload, sanitize_upload_filename
 from app.models import (
     Critique,
     DemandGroup,
@@ -144,10 +145,12 @@ async def preview_semrush_import(
     report_type: str = Form(default="KEYWORD_OVERVIEW"),
     locale: str = Form(default="en-US"),
     sheet_name: str | None = Form(default=None),
+    target_keyword: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     """
     Step 04 preview ONLY:
+    - Stream-reads bounded bytes BEFORE buffering into RAM.
     - Detects sheet, encoding, delimiter, headers, sample rows, suggested column mapping.
     - Does NOT write research evidence or mark business step complete!
     """
@@ -166,11 +169,8 @@ async def preview_semrush_import(
     if rt not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"Loại báo cáo không hợp lệ: {rt}")
 
-    raw = await file.read()
-    if not raw:
-        raise HTTPException(status_code=400, detail="File tải lên rỗng.")
-
-    filename = file.filename or "semrush_export.csv"
+    raw = await read_bounded_upload(file)
+    filename = sanitize_upload_filename(file.filename, default_name="semrush_export.csv")
     try:
         headers, data_rows, meta = read_tabular_file(raw, filename, sheet_name=sheet_name)
     except ValueError as exc:
@@ -178,11 +178,11 @@ async def preview_semrush_import(
 
     ensure_data_dirs()
     sha = hashlib.sha256(raw).hexdigest()
-    safe_name = f"{project.id}_semrush_{sha[:10]}_{Path(filename).name}"
-    stored = settings.uploads_dir / safe_name
+    stored = build_unique_upload_path(settings.uploads_dir, project.id, "semrush", sha, filename)
     stored.write_bytes(raw)
 
     suggested = suggest_column_mapping(headers, rt)
+    resolved_target_kw = (target_keyword or (req.seed_keyword if req else "") or "").strip()
 
     upload = FileUpload(
         project_id=project.id,
@@ -199,7 +199,10 @@ async def preview_semrush_import(
         locale=locale,
         row_count_total=len(data_rows),
         status="PREVIEWED",
-        preview_meta_json=json.dumps({"headers": headers, "sheets": meta["sheets"]}, ensure_ascii=False),
+        preview_meta_json=json.dumps(
+            {"headers": headers, "sheets": meta["sheets"], "target_keyword": resolved_target_kw},
+            ensure_ascii=False,
+        ),
     )
     db.add(upload)
     if req:
@@ -214,11 +217,13 @@ async def preview_semrush_import(
 
     return {
         "upload_id": upload.id,
-        "saved_to_research": False,  # Preview does NOT complete the import!
+        "saved_to_research": False,
         "navigation_eligible": False,
         "filename": filename,
         "sha256": sha,
         "report_type": rt,
+        "target_keyword": resolved_target_kw,
+        "requires_target_keyword": rt == "ORGANIC_RESULTS" and not suggested.get("keyword"),
         "file_format": meta["file_format"],
         "sheets": meta["sheets"],
         "sheet_name": meta["sheet_name"],
@@ -246,7 +251,7 @@ def confirm_semrush_import(
     """
     Confirm Semrush import:
     - Processes ALL rows in stored file (not just preview rows).
-    - Preserves raw rows + normalized rows + warnings + hash + source timestamp in SQLite.
+    - Preserves raw rows + normalized rows + SERP diagnostics + hash + source timestamp in SQLite.
     - Status is strictly PROCESS_COMPLETED, NEVER QUALITY_APPROVED or READY_FOR_BRIEF!
     """
     project = db.get(Project, project_id)
@@ -265,6 +270,20 @@ def confirm_semrush_import(
     if rt not in VALID_REPORT_TYPES:
         raise HTTPException(status_code=400, detail=f"Loại báo cáo không hợp lệ: {rt}")
 
+    req = None
+    req_id = payload.research_request_id or upload.research_request_id
+    if req_id:
+        req = db.get(ResearchRequest, req_id)
+        if req and req.project_id != project.id:
+            raise HTTPException(status_code=403, detail="Phiếu Yêu cầu Semrush không thuộc dự án này.")
+
+    preview_meta = json.loads(upload.preview_meta_json or "{}")
+    fallback_kw = (
+        (payload.target_keyword or "").strip()
+        or (req.seed_keyword.strip() if req else "")
+        or str(preview_meta.get("target_keyword") or "").strip()
+    )
+
     try:
         headers, data_rows, meta = read_tabular_file(
             raw_path.read_bytes(),
@@ -278,15 +297,14 @@ def confirm_semrush_import(
             column_mapping=payload.column_mapping,
             locale=payload.locale,
             market=payload.market.upper(),
+            fallback_keyword=fallback_kw or None,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
-    req = db.get(ResearchRequest, payload.research_request_id) if payload.research_request_id else None
-
     batch = ResearchBatch(
         project_id=project.id,
-        research_request_id=req.id if req else upload.research_request_id,
+        research_request_id=req.id if req else None,
         file_upload_id=upload.id,
         report_type=rt,
         market=payload.market.upper(),
@@ -296,7 +314,7 @@ def confirm_semrush_import(
         total_normalized_rows=parsed.total_normalized_rows,
         duplicate_rows_detected=parsed.duplicate_rows_detected,
         warnings_json=json.dumps(parsed.warnings, ensure_ascii=False),
-        status="PROCESS_COMPLETED",  # Strictly technical completion, NEVER QUALITY_APPROVED!
+        status="PROCESS_COMPLETED",
     )
     db.add(batch)
     db.flush()
@@ -324,6 +342,9 @@ def confirm_semrush_import(
             organic_position=row["organic_position"],
             organic_title=row["organic_title"],
             organic_page_type=row["organic_page_type"],
+            serp_result_type=row.get("serp_result_type", "ORGANIC"),
+            organic_domain=row.get("organic_domain", ""),
+            organic_valid=bool(row.get("organic_valid", True)),
             market=row["market"],
             is_duplicate=row["is_duplicate"],
             raw_row_json=json.dumps(row["raw_row"], ensure_ascii=False, default=str),
@@ -444,6 +465,9 @@ def get_project_evidence(
                 "organic_position": r.organic_position,
                 "organic_title": r.organic_title,
                 "organic_page_type": r.organic_page_type,
+                "serp_result_type": getattr(r, "serp_result_type", "ORGANIC"),
+                "organic_domain": getattr(r, "organic_domain", ""),
+                "organic_valid": bool(getattr(r, "organic_valid", True)),
                 "market": r.market,
                 "is_duplicate": r.is_duplicate,
                 "warnings": json.loads(r.warnings_json or "[]"),

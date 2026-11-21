@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Layers, Map, Wrench } from 'lucide-react';
+import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardCheck, Layers, Map, Wrench } from 'lucide-react';
 import { useProject } from '@/context/ProjectContext';
 import { ApiError, apiRequest } from '@/lib/api';
 import type { KeywordMappingItem, OpportunityItem, StandardizedError } from '@/lib/types';
@@ -11,8 +11,10 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { ResponsiveTable } from '@/components/ResponsiveTable';
 
 interface OpportunitiesPayload {
+  policy_version?: string;
   serp_verified: boolean;
   serp_status: string;
+  eligible_official_count?: number;
   plan_mode: string;
   article_quota: {
     soft_min: number;
@@ -32,18 +34,23 @@ export default function Step06MappingPage() {
   const [data, setData] = useState<OpportunitiesPayload | null>(null);
   const [building, setBuilding] = useState(false);
   const [error, setError] = useState<StandardizedError | null>(null);
+  const currentPidRef = useRef<string | null>(null);
+  currentPidRef.current = activeProject?.id ?? null;
 
   const loadData = useCallback(async () => {
     if (!activeProject) return;
+    const reqPid = activeProject.id;
     try {
-      const res = await apiRequest<OpportunitiesPayload>(`/api/v1/projects/${activeProject.id}/opportunities`);
-      setData(res);
+      const res = await apiRequest<OpportunitiesPayload>(`/api/v1/projects/${reqPid}/opportunities`);
+      if (currentPidRef.current === reqPid) setData(res);
     } catch (err) {
-      if (err instanceof ApiError && err.structured) setError(err.structured);
+      if (currentPidRef.current === reqPid && err instanceof ApiError && err.structured) setError(err.structured);
     }
   }, [activeProject]);
 
   useEffect(() => {
+    setData(null);
+    setError(null);
     void loadData();
   }, [loadData]);
 
@@ -56,6 +63,7 @@ export default function Step06MappingPage() {
   }
 
   const handleGenerateMapping = async () => {
+    const reqPid = activeProject.id;
     setBuilding(true);
     setError(null);
     try {
@@ -63,23 +71,28 @@ export default function Step06MappingPage() {
         revision: number;
         mappings_count: number;
         approvals_created: number;
+        approvals_superseded?: number;
+        briefs_marked_stale?: number;
         serp_status: string;
         navigation_eligible: boolean;
         next_step_href: string;
-      }>(`/api/v1/projects/${activeProject.id}/mapping/preview`, { method: 'POST' });
+      }>(`/api/v1/projects/${reqPid}/mapping/preview`, { method: 'POST' });
+      if (currentPidRef.current !== reqPid) return;
       await loadData();
-      await refreshProjects(activeProject.id);
-      showCompletionPopup({
-        title: `Đã lập Keyword Mapping revision #${res.revision}`,
-        message: `Đã lưu ${res.mappings_count} dòng mapping (${res.serp_status}) và tạo ${res.approvals_created} mục chờ bạn phê duyệt.`,
-        nextStepLabel: res.approvals_created > 0 ? 'Chờ phê duyệt' : 'Bước 07 — Content Brief',
-        nextStepHref: res.next_step_href,
-        navigationEligible: res.navigation_eligible,
-      });
+      await refreshProjects(reqPid);
+      if (res.navigation_eligible) {
+        showCompletionPopup({
+          title: `Đã cập nhật Keyword Mapping rev #${res.revision}`,
+          message: `Đã lưu ${res.mappings_count} dòng mapping (${res.serp_status}) vào SQLite.`,
+          nextStepLabel: 'Bước 07 — Content Brief',
+          nextStepHref: res.next_step_href,
+          navigationEligible: true,
+        });
+      }
     } catch (err) {
-      if (err instanceof ApiError && err.structured) setError(err.structured);
+      if (currentPidRef.current === reqPid && err instanceof ApiError && err.structured) setError(err.structured);
     } finally {
-      setBuilding(false);
+      if (currentPidRef.current === reqPid) setBuilding(false);
     }
   };
 
@@ -89,7 +102,7 @@ export default function Step06MappingPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Bước 06 — Kế hoạch bài viết & Keyword Mapping</h1>
           <p className="mt-1 text-sm text-slate-400">
-            Xây dựng cơ hội bài viết dựa trên bằng chứng Semrush. Không có màn hình nhập SERP thủ công; nếu thiếu file ORGANIC_RESULTS, kế hoạch luôn được gắn <code className="text-amber-300">SERP_NOT_VERIFIED</code>.
+            Mỗi Mapping được kiểm chứng độc lập theo đúng từ khóa, đúng thị trường và đúng phiên bản/fingerprint. Không có bước nhập SERP thủ công; mục chưa đủ SERP luôn gắn <code className="text-amber-300">SERP_NOT_VERIFIED</code> hoặc <code className="text-orange-300">PARTIAL_SERP_EVIDENCE</code>.
           </p>
         </div>
 
@@ -120,22 +133,24 @@ export default function Step06MappingPage() {
         <div className="grid gap-4 lg:grid-cols-2">
           <div
             className={`rounded-2xl border p-4 text-xs space-y-1.5 ${
-              data.serp_verified
+              data.serp_status === 'SERP_VERIFIED' || data.serp_status === 'TOP_10_VERIFIED'
                 ? 'border-emerald-500/30 bg-emerald-950/20 text-emerald-200'
                 : 'border-amber-500/35 bg-amber-950/20 text-amber-200'
             }`}
           >
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between gap-2">
               <span className="font-bold flex items-center gap-1.5">
                 {data.serp_verified ? <CheckCircle2 className="h-4 w-4" /> : <AlertTriangle className="h-4 w-4" />}
-                Trạng thái bằng chứng SERP
+                Bằng chứng SERP & Điều kiện Brief chính thức
               </span>
               <StatusBadge status={data.serp_status} />
             </div>
             <p className="text-slate-300">
-              {data.serp_verified
-                ? 'Đã đối chiếu bằng chứng ORGANIC_RESULTS từ Semrush. Sau khi người dùng phê duyệt Mapping, bạn có thể xuất Content Brief CHÍNH THỨC.'
-                : 'Chưa có file ORGANIC_RESULTS: kế hoạch hiện tại là DỰ THẢO (SERP_NOT_VERIFIED). Hệ thống KHÔNG giả vờ đã phân tích Top 10 Google.'}
+              Đủ điều kiện xuất Brief CHÍNH THỨC:{' '}
+              <strong className="text-sky-300">
+                {data.eligible_official_count ?? 0}/{data.mappings.length}
+              </strong>{' '}
+              mapping (Policy v{data.policy_version || '1.6.1'}). Bằng chứng SERP của từ khóa A không tự động hợp thức hóa từ khóa B.
             </p>
           </div>
 
@@ -162,56 +177,90 @@ export default function Step06MappingPage() {
             Chưa có Keyword Mapping. Bấm <strong>Lập / Cập nhật Keyword Mapping</strong> để dựng kế hoạch từ dữ liệu SQLite.
           </div>
         ) : (
-          <ResponsiveTable caption="Bảng kế hoạch Keyword Mapping theo bằng chứng">
+          <ResponsiveTable caption="Bảng kế hoạch Keyword Mapping theo bằng chứng từng từ khóa">
             <thead>
               <tr>
-                <th scope="col">Keyword chính</th>
+                <th scope="col">Keyword chính & Phiên bản</th>
                 <th scope="col">Loại trang & URL</th>
                 <th scope="col">Metrics & Nguồn</th>
-                <th scope="col">Ưu tiên / Giá trị / Công sức</th>
-                <th scope="col">Đề xuất gộp/tách & Trạng thái</th>
-                <th scope="col">Phê duyệt</th>
+                <th scope="col">SERP & Phê duyệt</th>
+                <th scope="col">Điểm nghẽn cụ thể & Hành động sửa</th>
               </tr>
             </thead>
             <tbody>
-              {data.mappings.map((m) => (
-                <tr key={m.id}>
-                  <th scope="row">
-                    <div>{m.primary_keyword}</div>
-                    {m.secondary_keywords.length > 0 && (
-                      <div className="mt-1 text-[11px] font-normal text-slate-400">
-                        Phụ: {m.secondary_keywords.slice(0, 4).join(', ')}
+              {data.mappings.map((m) => {
+                const elig = m.eligibility;
+                const blockers = elig?.blockers || [];
+                const needsReapproval = elig?.approval_state === 'STALE_SUPERSEDED';
+                return (
+                  <tr key={m.id}>
+                    <th scope="row">
+                      <div>{m.primary_keyword}</div>
+                      <div className="mt-1 font-mono text-[11px] font-normal text-slate-400">
+                        rev #{m.revision} {m.content_fingerprint ? `· fp:${m.content_fingerprint.slice(0, 8)}` : ''}
                       </div>
-                    )}
-                  </th>
-                  <td data-label="Loại trang & URL">
-                    <span className="rounded bg-violet-500/20 px-2 py-0.5 text-xs font-semibold text-violet-200">
-                      {m.page_type}
-                    </span>
-                    <div className="mt-1 font-mono text-xs text-sky-300">{m.proposed_url}</div>
-                  </td>
-                  <td data-label="Metrics & Nguồn" className="text-xs">
-                    <div className="font-mono">
-                      Vol: {m.volume !== null ? m.volume.toLocaleString('vi-VN') : 'null'} · KD: {m.kd !== null ? `${m.kd}%` : 'null'}
-                    </div>
-                    <div className="text-slate-400">Intent: {m.intent || 'thiếu'}</div>
-                    <div className="text-[11px] text-slate-500">{m.metrics_source}</div>
-                  </td>
-                  <td data-label="Ưu tiên" className="text-xs">
-                    <span className="font-mono font-bold text-sky-300">{m.priority}</span> · Biz: {m.business_value} · Effort: {m.effort}
-                  </td>
-                  <td data-label="Đề xuất" className="text-xs max-w-xs space-y-1.5">
-                    <div className="flex flex-wrap gap-1">
-                      <StatusBadge status={m.serp_status} />
-                      <StatusBadge status={m.content_status} />
-                    </div>
-                    <p className="text-slate-400 leading-relaxed">{m.merge_split_proposal}</p>
-                  </td>
-                  <td data-label="Phê duyệt">
-                    <StatusBadge status={m.is_approved ? 'APPROVED' : 'PENDING'} />
-                  </td>
-                </tr>
-              ))}
+                      {m.secondary_keywords.length > 0 && (
+                        <div className="mt-1 text-[11px] font-normal text-slate-400">
+                          Phụ: {m.secondary_keywords.slice(0, 4).join(', ')}
+                        </div>
+                      )}
+                    </th>
+                    <td data-label="Loại trang & URL">
+                      <span className="rounded bg-violet-500/20 px-2 py-0.5 text-xs font-semibold text-violet-200">
+                        {m.page_type}
+                      </span>
+                      <div className="mt-1 font-mono text-xs text-sky-300">{m.proposed_url}</div>
+                      <div className="mt-1 text-[11px] text-slate-400">
+                        {m.priority} · Biz: {m.business_value} · Effort: {m.effort}
+                      </div>
+                    </td>
+                    <td data-label="Metrics & Nguồn" className="text-xs">
+                      <div className="font-mono">
+                        Vol: {m.volume !== null ? m.volume.toLocaleString('vi-VN') : 'null'} · KD: {m.kd !== null ? `${m.kd}%` : 'null'}
+                      </div>
+                      <div className="text-slate-400">Intent: {m.intent || 'thiếu'}</div>
+                      <div className="text-[11px] text-slate-500">{m.metrics_source}</div>
+                    </td>
+                    <td data-label="SERP & Phê duyệt" className="space-y-1.5">
+                      <div className="flex flex-wrap gap-1">
+                        <StatusBadge status={elig?.serp_tier || m.serp_status} />
+                        {needsReapproval ? (
+                          <StatusBadge status="STALE_SUPERSEDED" />
+                        ) : (
+                          <StatusBadge status={m.is_approved ? 'APPROVED' : 'PENDING'} />
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        Brief chính thức:{' '}
+                        <strong className={elig?.eligible_official ? 'text-emerald-300' : 'text-amber-300'}>
+                          {elig?.eligible_official ? 'ĐỦ ĐIỀU KIỆN' : 'CHƯA ĐỦ GATE'}
+                        </strong>
+                      </div>
+                    </td>
+                    <td data-label="Điểm nghẽn" className="text-xs max-w-sm space-y-1.5">
+                      {blockers.length === 0 ? (
+                        <div className="inline-flex items-center gap-1.5 text-emerald-300 font-medium">
+                          <CheckCircle2 className="h-4 w-4" /> Đạt đủ Quality Gates cho Brief chính thức
+                        </div>
+                      ) : (
+                        <ul className="space-y-1.5">
+                          {blockers.map((b, idx) => (
+                            <li key={idx} className="rounded-lg border border-amber-500/25 bg-amber-950/20 p-2 space-y-1">
+                              <div className="font-mono text-[11px] font-semibold text-amber-200">{b.code}</div>
+                              <p className="text-slate-300">{b.reason}</p>
+                              {b.cta_href && (
+                                <Link href={b.cta_href} className="inline-flex items-center gap-1 text-sky-400 hover:text-sky-300 font-semibold">
+                                  {b.cta_label || 'Khắc phục'} <ArrowRight className="h-3 w-3" />
+                                </Link>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </ResponsiveTable>
         )}

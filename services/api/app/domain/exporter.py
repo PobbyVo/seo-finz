@@ -5,7 +5,6 @@ import html
 import io
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import openpyxl
@@ -14,6 +13,11 @@ from sqlalchemy.orm import Session
 
 from app.config import ensure_data_dirs, settings
 from app.domain.brief_engine import serialize_brief
+from app.domain.eligibility_policy import (
+    POLICY_VERSION,
+    evaluate_mapping_eligibility,
+    load_project_policy_context,
+)
 from app.domain.mapping_engine import slugify_vi
 from app.models import ContentBrief, EvidenceRow, ExportRecord, KeywordMapping, Project
 
@@ -26,6 +30,7 @@ def _safe_project_prefix(project: Project) -> str:
 
 
 def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
+    ctx = load_project_policy_context(db, project)
     evidence_rows = (
         db.query(EvidenceRow)
         .filter(
@@ -38,7 +43,7 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
     )
     mappings = (
         db.query(KeywordMapping)
-        .filter(KeywordMapping.project_id == project.id)
+        .filter(KeywordMapping.project_id == project.id, KeywordMapping.is_archived == False)  # noqa: E712
         .order_by(KeywordMapping.priority.asc(), KeywordMapping.created_at.asc())
         .all()
     )
@@ -49,7 +54,38 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
         .all()
     )
 
+    mapping_rows: list[dict[str, Any]] = []
+    for m in mappings:
+        dec = evaluate_mapping_eligibility(project, m, ctx)
+        mapping_rows.append(
+            {
+                "id": m.id,
+                "revision": m.revision,
+                "content_fingerprint": m.content_fingerprint[:12],
+                "primary_keyword": m.primary_keyword,
+                "secondary_keywords": json.loads(m.secondary_keywords_json or "[]"),
+                "page_type": m.page_type,
+                "proposed_url": m.proposed_url,
+                "volume": m.volume,
+                "kd": m.kd,
+                "intent": m.intent,
+                "metrics_source": m.metrics_source,
+                "priority": m.priority,
+                "business_value": m.business_value,
+                "effort": m.effort,
+                "serp_status": dec["serp_tier"],
+                "top10_verified": dec["top10_verified"],
+                "content_status": dec["recommended_content_status"],
+                "eligible_official": dec["eligible_official"],
+                "approval_state": dec["approval_state"],
+                "is_approved": dec["approval_state"] == "APPROVED_CURRENT",
+                "merge_split_proposal": m.merge_split_proposal,
+            }
+        )
+
     return {
+        "policy_version": POLICY_VERSION,
+        "contains_api_keys": False,
         "project": {
             "id": project.id,
             "code": project.code,
@@ -74,27 +110,7 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
             }
             for r in evidence_rows
         ],
-        "keyword_mapping": [
-            {
-                "id": m.id,
-                "primary_keyword": m.primary_keyword,
-                "secondary_keywords": json.loads(m.secondary_keywords_json or "[]"),
-                "page_type": m.page_type,
-                "proposed_url": m.proposed_url,
-                "volume": m.volume,
-                "kd": m.kd,
-                "intent": m.intent,
-                "metrics_source": m.metrics_source,
-                "priority": m.priority,
-                "business_value": m.business_value,
-                "effort": m.effort,
-                "serp_status": m.serp_status,
-                "content_status": m.content_status,
-                "is_approved": m.is_approved,
-                "merge_split_proposal": m.merge_split_proposal,
-            }
-            for m in mappings
-        ],
+        "keyword_mapping": mapping_rows,
         "content_briefs": [serialize_brief(b) for b in briefs],
     }
 
@@ -102,7 +118,7 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
 def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[bytes, str, str, ExportRecord]:
     """
     Export SEO deliverables in XLSX (3 logical sheets), CSV, JSON, or printable HTML.
-    Never includes API keys or secret references.
+    Includes truthful verification/staleness labels and NEVER includes API keys or secret refs.
     """
     ensure_data_dirs()
     fmt_clean = fmt.lower().strip()
@@ -113,7 +129,11 @@ def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[byte
     ts = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
     prefix = _safe_project_prefix(project)
     briefs = data["content_briefs"]
-    mode = "OFFICIAL" if (briefs and all(b["brief_mode"] == "OFFICIAL" for b in briefs)) else "DRAFT"
+    mode = (
+        "OFFICIAL"
+        if (briefs and all(b["brief_mode"] == "OFFICIAL" and not b["is_stale"] for b in briefs))
+        else "DRAFT"
+    )
 
     if fmt_clean == "xlsx":
         content = _build_xlsx(data)
@@ -164,18 +184,18 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
     """Build workbook with exact 3 logical tables: Keyword Overview, Keyword Mapping, SEO Content Brief."""
     wb = openpyxl.Workbook()
 
-    # Sheet A: Keyword Overview
     ws1 = wb.active
     ws1.title = "Keyword Overview"
     _style_header(ws1, ["Keyword", "Volume", "KD", "Intent", "CPC", "SERP Features", "Market", "Batch ID"])
     for r in data["keyword_overview"]:
         ws1.append([r["keyword"], r["volume"], r["kd"], r["intent"], r["cpc"], r["serp_features"], r["market"], r["batch_id"]])
 
-    # Sheet B: Keyword Mapping
     ws2 = wb.create_sheet(title="Keyword Mapping")
     _style_header(
         ws2,
         [
+            "Revision",
+            "Fingerprint",
             "Primary Keyword",
             "Secondary Keywords",
             "Page Type",
@@ -187,15 +207,19 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
             "Priority",
             "Business Value",
             "Effort",
-            "SERP Status",
+            "SERP Tier",
+            "Top 10 Verified",
             "Content Status",
-            "Approved",
+            "Approval State",
+            "Eligible Official",
             "Merge/Split Proposal",
         ],
     )
     for m in data["keyword_mapping"]:
         ws2.append(
             [
+                m["revision"],
+                m["content_fingerprint"],
                 m["primary_keyword"],
                 ", ".join(m["secondary_keywords"]),
                 m["page_type"],
@@ -208,19 +232,22 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
                 m["business_value"],
                 m["effort"],
                 m["serp_status"],
+                "YES" if m["top10_verified"] else "NO",
                 m["content_status"],
-                "YES" if m["is_approved"] else "NO",
+                m["approval_state"],
+                "YES" if m["eligible_official"] else "NO",
                 m["merge_split_proposal"],
             ]
         )
 
-    # Sheet C: SEO Content Brief
     ws3 = wb.create_sheet(title="SEO Content Brief")
     _style_header(
         ws3,
         [
             "BR ID",
             "Mode",
+            "Stale",
+            "Mapping Rev",
             "Content Type",
             "Priority",
             "Status",
@@ -261,6 +288,8 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
             [
                 b["br_code"],
                 b["brief_mode"],
+                "STALE" if b["is_stale"] else "CURRENT",
+                b.get("mapping_revision") or "",
                 b["content_type"],
                 b["priority"],
                 b["status"],
@@ -294,6 +323,7 @@ def _build_csv(data: dict[str, Any]) -> bytes:
         [
             "BR ID",
             "Mode",
+            "Freshness",
             "Content Type",
             "Priority",
             "Status",
@@ -315,6 +345,7 @@ def _build_csv(data: dict[str, Any]) -> bytes:
             [
                 b["br_code"],
                 b["brief_mode"],
+                "STALE" if b["is_stale"] else "CURRENT",
                 b["content_type"],
                 b["priority"],
                 b["status"],
@@ -345,13 +376,14 @@ def _build_printable_html(data: dict[str, Any]) -> str:
             children = "".join(f"<li><strong>{html.escape(c['level'])}:</strong> {html.escape(c['heading'])}</li>" for c in h.get("children", []))
             outline_li += f"<li><strong>{html.escape(h['level'])}:</strong> {html.escape(h['heading'])}<ul>{children}</ul></li>"
         checklist_li = "".join(f"<li>{html.escape(item)}</li>" for item in b.get("seo_checklist", []))
+        stale_flag = " · STALE (CẦN TẠO LẠI)" if b["is_stale"] else ""
 
         brief_blocks.append(
             f"""
             <section class="brief-card">
               <div class="brief-head">
                 <h2>{html.escape(b['br_code'])} — {html.escape(b['primary_keyword'])}</h2>
-                <span class="badge">{html.escape(b['brief_mode'])} · {html.escape(b['status'])} · {html.escape(b['content_type'])} · {html.escape(b['priority'])}</span>
+                <span class="badge">{html.escape(b['brief_mode'])}{html.escape(stale_flag)} · {html.escape(b['status'])} · {html.escape(b['content_type'])} · {html.escape(b['priority'])}</span>
               </div>
               <p><strong>URL đề xuất:</strong> {html.escape(b['proposed_url'])}</p>
               <p><strong>SEO Title:</strong> {html.escape(b['seo_title'])}</p>
@@ -390,7 +422,7 @@ def _build_printable_html(data: dict[str, Any]) -> str:
 <body>
   <header>
     <h1>FinZ SEO Content Brief — {html.escape(proj['code'])}: {html.escape(proj['name'])}</h1>
-    <p>Topic Pillar: {html.escape(proj['topic_pillar_code'])} {html.escape(proj['topic_pillar_name'])} | Thị trường: {html.escape(proj['market'])} | Phiên bản: v{proj['version']}</p>
+    <p>Topic Pillar: {html.escape(proj['topic_pillar_code'])} {html.escape(proj['topic_pillar_name'])} | Thị trường: {html.escape(proj['market'])} | Phiên bản: v{proj['version']} | Policy: v{html.escape(data['policy_version'])}</p>
   </header>
   {''.join(brief_blocks) or '<p>Chưa có Content Brief nào được tạo.</p>'}
 </body>

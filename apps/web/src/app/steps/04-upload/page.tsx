@@ -40,10 +40,13 @@ const METRICS_FIELDS = [
 
 const ORGANIC_FIELDS = [
   { key: 'url', label: 'URL Organic (Bắt buộc) *' },
-  { key: 'keyword', label: 'Keyword' },
   { key: 'position', label: 'Position / Thứ hạng' },
+  { key: 'result_type', label: 'Type (Organic / AI Overview)' },
+  { key: 'domain', label: 'Domain' },
+  { key: 'keyword', label: 'Keyword (nếu file có cột này)' },
   { key: 'title', label: 'Title' },
   { key: 'page_type', label: 'Loại trang (nếu có)' },
+  { key: 'serp_features', label: 'SERP Features' },
 ];
 
 function UploadContent() {
@@ -56,6 +59,7 @@ function UploadContent() {
   const [reportType, setReportType] = useState<'KEYWORD_OVERVIEW' | 'RELATED' | 'QUESTIONS' | 'ORGANIC_RESULTS'>('KEYWORD_OVERVIEW');
   const [locale, setLocale] = useState<'en-US' | 'vi-VN'>('en-US');
   const [market, setMarket] = useState('VN');
+  const [targetKeyword, setTargetKeyword] = useState('');
 
   const [preview, setPreview] = useState<ImportPreviewResp | null>(null);
   const [columnMapping, setColumnMapping] = useState<Record<string, string | null>>({});
@@ -76,6 +80,7 @@ function UploadContent() {
           setSelectedRequestId(match.id);
           setReportType(match.report_type);
           setMarket(match.market || activeProject.market || 'VN');
+          setTargetKeyword(match.seed_keyword || '');
         }
       }
     } catch {
@@ -85,7 +90,12 @@ function UploadContent() {
 
   useEffect(() => {
     void loadRequests();
-    if (activeProject) setMarket(activeProject.market || 'VN');
+    if (activeProject) {
+      setMarket(activeProject.market || 'VN');
+      setTargetKeyword((prev) => prev || activeProject.primary_keyword_current || activeProject.primary_keyword_original || '');
+      setPreview(null);
+      setError(null);
+    }
   }, [loadRequests, activeProject]);
 
   if (!activeProject) {
@@ -102,6 +112,7 @@ function UploadContent() {
     if (match) {
       setReportType(match.report_type);
       setMarket(match.market || activeProject.market || 'VN');
+      setTargetKeyword(match.seed_keyword || '');
     }
   };
 
@@ -115,6 +126,9 @@ function UploadContent() {
       if (selectedRequestId) fd.append('research_request_id', selectedRequestId);
       fd.append('report_type', reportType);
       fd.append('locale', locale);
+      if (reportType === 'ORGANIC_RESULTS' && targetKeyword.trim()) {
+        fd.append('target_keyword', targetKeyword.trim());
+      }
       const data = await apiRequest<ImportPreviewResp>(
         `/api/v1/projects/${activeProject.id}/imports/preview`,
         { method: 'POST', body: fd }
@@ -150,6 +164,7 @@ function UploadContent() {
           market,
           locale,
           sheet_name: preview.sheet_name,
+          target_keyword: preview.report_type === 'ORGANIC_RESULTS' ? targetKeyword.trim() || null : null,
           column_mapping: columnMapping,
         }),
       });
@@ -234,7 +249,7 @@ function UploadContent() {
         </div>
 
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
-          <div className="flex items-center gap-3 text-xs text-slate-400">
+          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
             <label htmlFor="up-mkt">Thị trường file:</label>
             <input
               id="up-mkt"
@@ -242,6 +257,18 @@ function UploadContent() {
               onChange={(e) => setMarket(e.target.value.toUpperCase())}
               className="finz-input w-24 py-1 text-center font-mono"
             />
+            {reportType === 'ORGANIC_RESULTS' && (
+              <>
+                <label htmlFor="up-tkw">Từ khóa SERP (khi CSV không có cột Keyword):</label>
+                <input
+                  id="up-tkw"
+                  value={targetKeyword}
+                  onChange={(e) => setTargetKeyword(e.target.value)}
+                  placeholder="VD: lương net và gross là gì"
+                  className="finz-input w-64 py-1"
+                />
+              </>
+            )}
           </div>
 
           <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-sky-500 px-5 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-400 transition">

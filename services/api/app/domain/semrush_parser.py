@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import openpyxl
 
@@ -21,15 +22,20 @@ METRICS_COLUMN_ALIASES: dict[str, set[str]] = {
     "serp_features": {"serp_features", "serp_feature", "features", "serp_features_by_keyword"},
 }
 
+# NOTE: Semrush SERP Analysis CSV uses `Type` for `Organic` vs `AI Overview` (NOT page_type!)
 ORGANIC_COLUMN_ALIASES: dict[str, set[str]] = {
     "keyword": {"keyword", "keywords", "tu_khoa", "query"},
     "url": {"url", "landing_page", "page_url", "serp_url", "link"},
     "position": {"position", "pos", "rank", "ranking", "vi_tri"},
+    "result_type": {"type", "result_type", "serp_type", "loai_ket_qua"},
+    "domain": {"domain", "root_domain", "ten_mien"},
     "title": {"title", "page_title", "serp_title", "tieu_de"},
-    "page_type": {"page_type", "content_type", "type", "loai_trang"},
+    "page_type": {"page_type", "content_type", "loai_trang"},
+    "serp_features": {"serp_features", "serp_feature", "features"},
 }
 
 MISSING_TOKENS = {"", "-", "--", "—", "n/a", "na", "null", "none", "nan"}
+VALID_PAGE_TYPES = {"ARTICLE", "TOOL", "DOWNLOAD", "SERVICE", "PRODUCT", "UNKNOWN"}
 
 
 def parse_localized_number(raw: Any, locale: str = "en-US") -> float | None:
@@ -39,9 +45,7 @@ def parse_localized_number(raw: Any, locale: str = "en-US") -> float | None:
     - vi-VN: '9.900' -> 9900.0, '45,5' -> 45.5
     Missing/blank/'n/a'/'-' MUST return None (distinct from 0!).
     """
-    if raw is None:
-        return None
-    if isinstance(raw, bool):
+    if raw is None or isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
         return float(raw)
@@ -50,7 +54,6 @@ def parse_localized_number(raw: Any, locale: str = "en-US") -> float | None:
     if s.lower() in MISSING_TOKENS:
         return None
 
-    # Strip % or currency markers
     s = s.replace("%", "").replace("$", "").replace("₫", "").replace("VND", "").strip()
     if not s or s.lower() in MISSING_TOKENS:
         return None
@@ -67,24 +70,20 @@ def parse_localized_number(raw: Any, locale: str = "en-US") -> float | None:
     s = s.replace(" ", "").replace("\u00a0", "")
 
     if locale == "vi-VN":
-        # In vi-VN: '.' is thousands separator (e.g. 9.900 or 1.200.000), ',' is decimal (45,5)
         if "." in s and "," in s:
             s = s.replace(".", "").replace(",", ".")
         elif "." in s:
-            # Check if looks like thousands grouping (\d{1,3}(\.\d{3})+)
             if re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", s):
                 s = s.replace(".", "")
             elif multiplier > 1.0:
-                pass  # e.g., 1.2K
+                pass
             else:
-                # Could still be decimal like 45.5 pasted from tool; if 3 digits after dot, treat as thousands in vi-VN
                 parts = s.split(".")
                 if len(parts) == 2 and len(parts[1]) == 3:
                     s = s.replace(".", "")
         elif "," in s:
             s = s.replace(",", ".")
     else:
-        # en-US: ',' is thousands separator (9,900), '.' is decimal (45.5)
         if "," in s and "." in s:
             s = s.replace(",", "")
         elif "," in s:
@@ -99,7 +98,41 @@ def parse_localized_number(raw: Any, locale: str = "en-US") -> float | None:
         return None
 
 
+def validate_organic_url(url: str | None) -> tuple[bool, str, str]:
+    """Validate an organic URL (http/https + valid domain) and return (is_valid, canonical_url, domain)."""
+    if not url:
+        return False, "", ""
+    cleaned = url.strip()
+    parsed = urlparse(cleaned)
+    if parsed.scheme.lower() not in {"http", "https"} or not parsed.netloc or "." not in parsed.netloc:
+        return False, cleaned, ""
+    host = parsed.netloc.lower()
+    if host.startswith("www."):
+        host = host[4:]
+    path = parsed.path.rstrip("/") or "/"
+    canonical = f"{parsed.scheme.lower()}://{host}{path}"
+    if parsed.query:
+        canonical = f"{canonical}?{parsed.query}"
+    return True, canonical, host
+
+
+def normalize_serp_result_type(raw_type: Any) -> str:
+    """Classify Semrush SERP `Type` column into ORGANIC vs AI_OVERVIEW vs NON_ORGANIC."""
+    if raw_type is None:
+        return "ORGANIC"
+    s = str(raw_type).strip()
+    if not s or s.lower() in MISSING_TOKENS:
+        return "ORGANIC"
+    low = s.lower()
+    if low == "organic":
+        return "ORGANIC"
+    if "ai overview" in low or low == "ai_overview":
+        return "AI_OVERVIEW"
+    return re.sub(r"[^A-Z0-9]+", "_", s.upper()).strip("_") or "NON_ORGANIC"
+
+
 def infer_page_type_from_url(url: str | None, title: str | None = None) -> str:
+    """Hypothesis-only page-type inference from URL/title."""
     combined = f"{url or ''} {title or ''}".lower()
     if any(k in combined for k in ("/tool", "/tinh-", "calculator", "cong-cu", "tính ", "quy-doi")):
         return "TOOL"
@@ -171,7 +204,6 @@ def read_tabular_file(
     else:
         raise ValueError(f"Định dạng '.{ext}' không được hỗ trợ. Vui lòng tải file CSV hoặc XLSX từ Semrush.")
 
-    # Drop leading completely blank rows
     non_empty = [r for r in all_rows if any(c is not None and str(c).strip() != "" for c in r)]
     if not non_empty:
         raise ValueError("Tệp tải lên không có dữ liệu.")
@@ -194,18 +226,23 @@ def suggest_column_mapping(headers: list[str], report_type: str) -> dict[str, st
         for field_name, aliases in alias_map.items():
             if suggested[field_name] is None and norm in aliases:
                 suggested[field_name] = h
-    # Fallback substring matching for Semrush localized headers like "Keyword Difficulty (%)"
     for h in headers:
         norm = strip_accents_key(h)
         if report_type == "ORGANIC_RESULTS":
-            if suggested["url"] is None and ("url" in norm or "link" in norm):
+            if suggested["url"] is None and (norm == "url" or "page_url" in norm or "serp_url" in norm or "link" in norm):
                 suggested["url"] = h
             if suggested["position"] is None and ("pos" in norm or "rank" in norm):
                 suggested["position"] = h
+            if suggested["result_type"] is None and norm in {"type", "result_type", "serp_type"}:
+                suggested["result_type"] = h
+            if suggested["domain"] is None and norm == "domain":
+                suggested["domain"] = h
             if suggested["title"] is None and "title" in norm:
                 suggested["title"] = h
-            if suggested["keyword"] is None and "keyword" in norm:
+            if suggested["keyword"] is None and norm in {"keyword", "keywords", "query", "tu_khoa"}:
                 suggested["keyword"] = h
+            if suggested["serp_features"] is None and "serp" in norm:
+                suggested["serp_features"] = h
         else:
             if suggested["keyword"] is None and "keyword" in norm:
                 suggested["keyword"] = h
@@ -240,10 +277,14 @@ def parse_semrush_rows(
     column_mapping: dict[str, str | None],
     locale: str = "en-US",
     market: str = "VN",
+    fallback_keyword: str | None = None,
 ) -> ParsedSemrushResult:
     """
     Parse ALL rows of a Semrush CSV/XLSX upload.
-    - ORGANIC_RESULTS uses a dedicated organic parser (URL, Position, Title, page_type).
+    - ORGANIC_RESULTS uses a dedicated organic parser distinguishing `Type=Organic` vs `AI Overview`,
+      validating URLs & positions >= 1, preserving rejected raw rows with diagnostics, and binding
+      `fallback_keyword` (from ResearchRequest.seed_keyword or explicit target_keyword) when the
+      Semrush SERP Analysis CSV omits a Keyword column.
     - METRICS parses Volume/KD/Intent/CPC/SERP Features with locale awareness, NULL != 0,
       and deduplicates keywords WITHOUT summing Volume.
     """
@@ -264,53 +305,138 @@ def parse_semrush_rows(
             raise ValueError(
                 "Báo cáo ORGANIC_RESULTS bắt buộc phải ghép cột URL (không dùng nhầm parser metrics cho báo cáo organic)."
             )
-        seen_organic: set[tuple[str, str, int | None]] = set()
+        bound_kw = (fallback_keyword or "").strip()
+        seen_organic_urls: set[tuple[str, str]] = set()
+        non_organic_count = 0
+        invalid_url_count = 0
+        invalid_pos_count = 0
+        missing_kw_count = 0
+
         for idx, row in enumerate(data_rows, start=2):
             raw_dict = {headers[i]: (row[i] if i < len(row) else None) for i in range(len(headers))}
-            kw = str(cell(row, "keyword") or "").strip()
-            url = str(cell(row, "url") or "").strip()
+            kw_cell = str(cell(row, "keyword") or "").strip()
+            kw = kw_cell or bound_kw
+            kw_norm = normalize_text(kw)
+            raw_url = str(cell(row, "url") or "").strip()
+            url_ok, canonical_url, host_from_url = validate_organic_url(raw_url)
+            domain = str(cell(row, "domain") or "").strip().lower() or host_from_url
             pos_val = parse_localized_number(cell(row, "position"), locale=locale)
             pos = int(round(pos_val)) if pos_val is not None else None
+            pos_ok = pos is not None and pos >= 1
+            result_type = normalize_serp_result_type(cell(row, "result_type"))
             title = str(cell(row, "title") or "").strip() or None
-            explicit_type = str(cell(row, "page_type") or "").strip().upper() or None
-            page_type = explicit_type if explicit_type in {"ARTICLE", "TOOL", "DOWNLOAD", "SERVICE", "PRODUCT", "UNKNOWN"} else infer_page_type_from_url(url, title)
+            sf_raw = cell(row, "serp_features")
+            serp_features = (
+                str(sf_raw).strip()
+                if sf_raw is not None and str(sf_raw).strip().lower() not in MISSING_TOKENS
+                else None
+            )
+            explicit_pt = str(cell(row, "page_type") or "").strip().upper() or None
+            page_type = explicit_pt if explicit_pt in VALID_PAGE_TYPES else infer_page_type_from_url(raw_url, title)
 
-            if not url:
-                warnings.append({"code": "MISSING_ORGANIC_URL", "row": idx, "message": f"Dòng {idx} thiếu URL organic."})
-                continue
+            row_warns: list[str] = []
+            organic_valid = True
+            if result_type != "ORGANIC":
+                organic_valid = False
+                non_organic_count += 1
+                row_warns.append(f"NON_ORGANIC_SERP_ROW:{result_type}")
+            if not url_ok:
+                organic_valid = False
+                invalid_url_count += 1
+                row_warns.append("INVALID_ORGANIC_URL")
+            if not pos_ok:
+                organic_valid = False
+                invalid_pos_count += 1
+                row_warns.append("INVALID_ORGANIC_POSITION")
+            if not kw_norm:
+                organic_valid = False
+                missing_kw_count += 1
+                row_warns.append("MISSING_SERP_KEYWORD")
 
-            dedup_key = (normalize_text(kw), url.lower(), pos)
-            is_dup = dedup_key in seen_organic
-            if is_dup:
-                dup_count += 1
-            else:
-                seen_organic.add(dedup_key)
+            is_dup = False
+            if organic_valid:
+                dedup_key = (kw_norm, canonical_url.lower())
+                if dedup_key in seen_organic_urls:
+                    is_dup = True
+                    dup_count += 1
+                    row_warns.append("DUPLICATE_ORGANIC_URL")
+                else:
+                    seen_organic_urls.add(dedup_key)
 
             parsed_rows.append(
                 {
                     "row_type": "ORGANIC_RESULTS",
                     "source_row_number": idx,
                     "keyword": kw,
-                    "keyword_normalized": normalize_text(kw),
+                    "keyword_normalized": kw_norm,
                     "volume": None,
                     "kd": None,
                     "intent": None,
                     "cpc": None,
-                    "serp_features": None,
-                    "organic_url": url,
+                    "serp_features": serp_features,
+                    "organic_url": raw_url or None,
                     "organic_position": pos,
                     "organic_title": title,
                     "organic_page_type": page_type,
+                    "serp_result_type": result_type,
+                    "organic_domain": domain,
+                    "organic_valid": organic_valid,
                     "market": market,
                     "is_duplicate": is_dup,
                     "raw_row": raw_dict,
-                    "row_warnings": ["DUPLICATE_ORGANIC_ROW"] if is_dup else [],
+                    "row_warnings": row_warns,
                 }
             )
+
+        if non_organic_count > 0:
+            warnings.append(
+                {
+                    "code": "NON_ORGANIC_SERP_ROWS_EXCLUDED",
+                    "severity": "INFO",
+                    "message": f"Đã giữ raw và loại {non_organic_count} dòng không phải Organic (vd: AI Overview) khỏi tính thứ hạng Organic.",
+                }
+            )
+        if dup_count > 0:
+            warnings.append(
+                {
+                    "code": "DUPLICATE_ORGANIC_URLS",
+                    "severity": "WARNING",
+                    "message": f"Phát hiện {dup_count} URL organic trùng lặp trong cùng từ khóa; giữ thứ hạng cao nhất.",
+                }
+            )
+        if invalid_url_count > 0:
+            warnings.append(
+                {
+                    "code": "INVALID_ORGANIC_URL",
+                    "severity": "WARNING",
+                    "message": f"{invalid_url_count} dòng có URL không hợp lệ (đã lưu raw để đối soát, không tính là bằng chứng SERP).",
+                }
+            )
+        if invalid_pos_count > 0:
+            warnings.append(
+                {
+                    "code": "INVALID_ORGANIC_POSITION",
+                    "severity": "WARNING",
+                    "message": f"{invalid_pos_count} dòng thiếu hoặc sai thứ hạng Position (<1).",
+                }
+            )
+        if missing_kw_count > 0:
+            warnings.append(
+                {
+                    "code": "MISSING_SERP_KEYWORD",
+                    "severity": "WARNING",
+                    "message": (
+                        f"{missing_kw_count} dòng SERP thiếu từ khóa gắn kết (không có cột Keyword và chưa gắn phiếu/từ khóa mục tiêu) "
+                        "— không được tính là bằng chứng xác minh SERP."
+                    ),
+                }
+            )
+
+        valid_normalized = len([r for r in parsed_rows if r["organic_valid"] and not r["is_duplicate"]])
         return ParsedSemrushResult(
             row_type="ORGANIC_RESULTS",
             total_raw_rows=len(data_rows),
-            total_normalized_rows=len([r for r in parsed_rows if not r["is_duplicate"]]),
+            total_normalized_rows=valid_normalized,
             duplicate_rows_detected=dup_count,
             rows=parsed_rows,
             warnings=warnings,
@@ -349,9 +475,17 @@ def parse_semrush_rows(
         cpc = round(cpc_num, 2) if cpc_num is not None else None
 
         intent_raw = cell(row, "intent")
-        intent = str(intent_raw).strip() if intent_raw is not None and str(intent_raw).strip().lower() not in MISSING_TOKENS else None
+        intent = (
+            str(intent_raw).strip()
+            if intent_raw is not None and str(intent_raw).strip().lower() not in MISSING_TOKENS
+            else None
+        )
         sf_raw = cell(row, "serp_features")
-        serp_features = str(sf_raw).strip() if sf_raw is not None and str(sf_raw).strip().lower() not in MISSING_TOKENS else None
+        serp_features = (
+            str(sf_raw).strip()
+            if sf_raw is not None and str(sf_raw).strip().lower() not in MISSING_TOKENS
+            else None
+        )
 
         if not is_dup:
             if volume is None:
@@ -379,6 +513,9 @@ def parse_semrush_rows(
                 "organic_position": None,
                 "organic_title": None,
                 "organic_page_type": None,
+                "serp_result_type": "METRICS",
+                "organic_domain": "",
+                "organic_valid": True,
                 "market": market,
                 "is_duplicate": is_dup,
                 "raw_row": raw_dict,

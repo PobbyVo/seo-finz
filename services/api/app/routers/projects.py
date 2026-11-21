@@ -6,7 +6,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.db import backup_database, get_db
+from app.db import BackupError, backup_database, get_db
 from app.domain.taxonomy_parser import normalize_text
 from app.domain.workflow import ensure_workflow_steps, refresh_workflow_state
 from app.models import (
@@ -418,14 +418,27 @@ def get_project_logs(project_id: str, db: Session = Depends(get_db)):
 
 @router.post("/{project_id}/backup")
 def create_safe_backup(project_id: str, db: Session = Depends(get_db)):
-    """Create local SQLite backup & return safe JSON backup snapshot (guaranteed NO API keys)."""
+    """Create verified online SQLite backup & return safe JSON backup snapshot (guaranteed NO API keys)."""
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
-    backup_file = backup_database(reason=f"project_{project.code}")
+    try:
+        backup_file = backup_database(reason=f"project_{project.code}")
+    except BackupError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "code": "DB_BACKUP_FAILED",
+                "reason": str(exc),
+                "impact": "Bản sao lưu SQLite không tạo được hoặc không vượt qua kiểm tra toàn vẹn (fail closed).",
+                "solution": "Kiểm tra dung lượng đĩa và quyền ghi thư mục data/backups/ rồi thử lại.",
+                "next_action": "Giải phóng dung lượng đĩa và tạo sao lưu lại.",
+            },
+        )
     return {
         "ok": True,
         "sqlite_backup_filename": backup_file.name if backup_file else None,
+        "integrity_verified": backup_file is not None,
         "contains_api_keys": False,
         "project_snapshot": serialize_project(db, project, include_workflow=True),
     }

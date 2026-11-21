@@ -91,11 +91,12 @@ def test_t15_t16_t17_t18_t19_t20_semrush_upload_locale_dedup_organic_and_gates(c
     assert ev["summary"]["ready_for_brief"] is False
     assert ev["summary"]["serp_status"] == "SERP_NOT_VERIFIED"
 
-    # Dedicated ORGANIC_RESULTS parser test
+    # Dedicated ORGANIC_RESULTS parser test: 2 URLs -> PARTIAL_SERP_EVIDENCE (not yet SERP_VERIFIED!), 3rd URL -> SERP_VERIFIED
     organic_csv = (
         "Keyword,Position,URL,Title\n"
         "quyết toán thuế doanh nghiệp,1,https://example.vn/blog/quyet-toan-thue,Hướng dẫn quyết toán thuế\n"
         "quyết toán thuế doanh nghiệp,2,https://example.vn/cong-cu/tinh-thue,Công cụ tính thuế\n"
+        "quyết toán thuế doanh nghiệp,3,https://example.vn/blog/luu-y-quyet-toan,Lưu ý quyết toán\n"
     ).encode("utf-8")
     oprev = tc.post(
         f"/api/v1/projects/{pid}/imports/preview",
@@ -115,7 +116,7 @@ def test_t15_t16_t17_t18_t19_t20_semrush_upload_locale_dedup_organic_and_gates(c
     )
     assert oconf.status_code == 200
     ev_after = tc.get(f"/api/v1/projects/{pid}/evidence?row_type=ORGANIC_RESULTS").json()
-    assert len(ev_after["rows"]) == 2
+    assert len(ev_after["rows"]) == 3
     assert ev_after["rows"][0]["organic_url"].startswith("https://")
     assert ev_after["rows"][1]["organic_page_type"] == "TOOL"
     assert ev_after["summary"]["serp_verified"] is True

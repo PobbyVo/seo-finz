@@ -8,14 +8,16 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.domain.brief_engine import (
+    BriefEligibilityError,
     ENGAGEMENT_TACTICS,
     WRITING_FORMULAS,
     generate_content_briefs,
     serialize_brief,
 )
 from app.domain.exporter import export_project_bundle
+from app.domain.quality_gates import evaluate_all_gates
 from app.domain.workflow import refresh_workflow_state
-from app.models import ContentBrief, ExportRecord, Project, ProjectEvent
+from app.models import ContentBrief, ExportRecord, KeywordMapping, Project, ProjectEvent
 from app.schemas import BriefGenerateRequest, ExportRequest
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["briefs-exports"])
@@ -32,8 +34,25 @@ def list_briefs(project_id: str, db: Session = Depends(get_db)):
         .order_by(ContentBrief.br_code.asc())
         .all()
     )
+    gates = evaluate_all_gates(db, project)
+    active_mappings = (
+        db.query(KeywordMapping)
+        .filter(KeywordMapping.project_id == project_id, KeywordMapping.is_archived == False)  # noqa: E712
+        .order_by(KeywordMapping.priority.asc(), KeywordMapping.created_at.asc())
+        .all()
+    )
     return {
         "briefs": [serialize_brief(b) for b in briefs],
+        "mappings_eligibility": [
+            {
+                "id": m.id,
+                "primary_keyword": m.primary_keyword,
+                "page_type": m.page_type,
+                "revision": m.revision,
+                "eligibility": gates["mapping_eligibilities"][m.id],
+            }
+            for m in active_mappings
+        ],
         "writing_formulas_catalog": WRITING_FORMULAS,
         "engagement_tactics_catalog": ENGAGEMENT_TACTICS,
         "workflow": refresh_workflow_state(db, project),
@@ -53,6 +72,8 @@ def generate_briefs(project_id: str, payload: BriefGenerateRequest, db: Session 
             allow_draft=payload.allow_draft,
             mapping_ids=payload.mapping_ids,
         )
+    except BriefEligibilityError as exc:
+        raise HTTPException(status_code=400, detail=exc.detail)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

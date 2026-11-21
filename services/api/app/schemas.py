@@ -87,6 +87,7 @@ class ImportConfirmRequest(BaseModel):
     market: str = "VN"
     locale: str = "en-US"
     sheet_name: str | None = None
+    target_keyword: str | None = None
     column_mapping: dict[str, str | None]
 
 

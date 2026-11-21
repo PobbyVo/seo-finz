@@ -192,9 +192,30 @@ export interface EvidenceRowItem {
   organic_position: number | null;
   organic_title: string | null;
   organic_page_type: string | null;
+  serp_result_type?: string;
+  organic_domain?: string;
+  organic_valid?: boolean;
   market: string;
   is_duplicate: boolean;
   warnings: string[];
+}
+
+export interface MappingEligibility {
+  mapping_id: string;
+  primary_keyword: string;
+  policy_version: string;
+  current_revision: number;
+  content_fingerprint: string;
+  eligible_official: boolean;
+  recommended_content_status: string;
+  serp_tier: string;
+  serp_status: string;
+  top10_verified: boolean;
+  approval_state: string;
+  blockers: StandardizedError[];
+  warnings: Array<{ code: string; message: string }>;
+  evidence_refs: string[];
+  gate_statuses: Record<string, string>;
 }
 
 export interface CritiqueItem {
@@ -213,7 +234,9 @@ export interface CritiqueItem {
 
 export interface KeywordMappingItem {
   id: string;
+  logical_key?: string;
   revision: number;
+  content_fingerprint?: string;
   primary_keyword: string;
   secondary_keywords: string[];
   page_type: string;
@@ -230,7 +253,10 @@ export interface KeywordMappingItem {
   content_status: string;
   evidence: string[];
   is_approved: boolean;
+  approved_revision?: number | null;
+  approved_fingerprint?: string | null;
   approved_at: string | null;
+  eligibility?: MappingEligibility;
 }
 
 export interface OpportunityItem {
@@ -252,6 +278,8 @@ export interface ApprovalItem {
   id: string;
   approval_type: string;
   target_ref: string;
+  target_revision?: number | null;
+  target_fingerprint?: string | null;
   title: string;
   original_value: string;
   proposed_value: string;
@@ -259,7 +287,7 @@ export interface ApprovalItem {
   evidence: string[];
   impact: string;
   scope: string;
-  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'NEED_MORE_EVIDENCE';
+  status: 'PENDING' | 'APPROVED' | 'REJECTED' | 'NEED_MORE_EVIDENCE' | 'SUPERSEDED';
   decision_note: string;
   decided_by: string;
   version: number;
@@ -269,6 +297,11 @@ export interface ApprovalItem {
 
 export interface ContentBriefItem {
   id: string;
+  keyword_mapping_id?: string | null;
+  mapping_revision?: number | null;
+  mapping_fingerprint?: string | null;
+  is_stale?: boolean;
+  eligibility_snapshot?: Record<string, unknown>;
   br_code: string;
   content_type: string;
   priority: string;
