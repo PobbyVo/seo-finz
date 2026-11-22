@@ -3,6 +3,8 @@
 Ứng dụng web local (**Dark Mode**, vận hành 1 người dùng trên máy tính, lưu dữ liệu vào SQLite) hỗ trợ chuyên viên SEO thực hiện quy trình nghiên cứu có kiểm chứng **7 bước**:
 `Nhập Topic Pillar/Keywords` → `AI phân tích & phản biện` → `Yêu cầu Semrush thủ công` → `Upload CSV/XLSX & ghép cột` → `Quality Gates & AI Critic` → `Keyword Mapping & Phê duyệt` → `SEO Content Brief & Xuất XLSX/CSV/JSON/HTML`.
 
+**Hướng dẫn thao tác chi tiết:** [Hướng dẫn sử dụng từng bước](docs/HUONG_DAN_SU_DUNG.md) — từ mở ứng dụng, cấu hình AI đến phê duyệt mapping, xuất Content Brief và sao lưu dữ liệu.
+
 ---
 
 ## 1. Yêu cầu môi trường trên máy mới
