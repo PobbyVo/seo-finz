@@ -70,6 +70,22 @@ KEYWORD_TABLE_ALIASES: dict[str, set[str]] = {
 }
 
 
+# Header gốc của Bộ key FinZ; giữ alias cũ để tương thích dữ liệu V1.6.
+for canonical, aliases in {
+    "topic_pillar_code": {"ma"}, "split_axis": {"truc_chia_cua_pillar"},
+    "main_topic": {"chu_de_chinh_ben_trong"}, "notes": {"ghi_chu"},
+    "legacy_code": {"ma_cu_20_pillar"},
+}.items():
+    TOPIC_PILLAR_ALIASES.setdefault(canonical, set()).update(aliases | {canonical})
+for canonical, aliases in {
+    "keyword": {"key"}, "role": {"loai"}, "content_code": {"ma_noi_dung_goc"},
+    "content_title": {"noi_dung_goc"}, "funnel_stage": {"giai_doan"},
+    "title_match_check": {"kiem_chung"}, "subtopic": {"chu_de"},
+    "planner_volume": {"luong_tim_thang_dien_tu_keyword_planner"},
+}.items():
+    KEYWORD_TABLE_ALIASES.setdefault(canonical, set()).update(aliases | {canonical})
+
+
 @dataclass
 class TopicSourcePreview:
     filename: str
@@ -143,7 +159,7 @@ def _parse_topic_rows(
             idx = col_map.get(col_key)
             if idx is None or idx >= len(row) or row[idx] is None:
                 return ""
-            return str(row[idx]).strip()
+            return unicodedata.normalize("NFC", str(row[idx])).strip()
 
         code = val("topic_pillar_code")
         name = val("topic_pillar_name")
@@ -195,6 +211,8 @@ def _parse_topic_rows(
                 "topic_type": topic_type,
                 "split_axis": split_axis,
                 "main_topic": main_topic,
+                "notes": val("notes"),
+                "legacy_code": val("legacy_code"),
                 "source_file": filename,
                 "source_sheet": sheet_name,
                 "source_row": offset,
@@ -219,10 +237,13 @@ def _parse_keyword_rows(
             idx = col_map.get(col_key)
             if idx is None or idx >= len(row) or row[idx] is None:
                 return ""
-            return str(row[idx]).strip()
+            return unicodedata.normalize("NFC", str(row[idx])).strip()
 
         tp_code = val("topic_pillar_code")
         c_code = val("content_code")
+        if not tp_code and c_code:
+            match = re.match(r"^([A-Za-z]+[0-9]+)", c_code)
+            tp_code = match.group(1).upper() if match else ""
         title = val("content_title")
         primary_kw = val("primary_keyword")
         secondary_list = _split_secondary_keywords(val("secondary_keywords"))
@@ -264,18 +285,26 @@ def _parse_keyword_rows(
                 "content_title": title,
                 "primary_keyword": "",
                 "secondary_keywords": [],
+                "keyword_rows": [],
                 "source_file": filename,
                 "source_sheet": sheet_name,
                 "source_row": offset,
             }
             grouped[key] = entry
 
+        if single_kw:
+            entry["keyword_rows"].append({
+                "keyword": single_kw, "role": "PRIMARY" if role in ("PRIMARY", "CHINH", "CHÍNH") else "SECONDARY",
+                "funnel_stage": val("funnel_stage").upper(), "title_match_check": val("title_match_check"),
+                "subtopic": val("subtopic"), "planner_volume": val("planner_volume"),
+                "source_row": offset,
+            })
         if title and not entry["content_title"]:
             entry["content_title"] = title
         if primary_kw and not entry["primary_keyword"]:
             entry["primary_keyword"] = primary_kw
         if single_kw:
-            if role in ("PRIMARY", "CHINH", "CHÍNH") or not entry["primary_keyword"]:
+            if role in ("PRIMARY", "CHINH", "CHÍNH") or ("role" not in col_map and not entry["primary_keyword"]):
                 if not entry["primary_keyword"]:
                     entry["primary_keyword"] = single_kw
                 elif normalize_text(single_kw) != normalize_text(entry["primary_keyword"]):
@@ -403,6 +432,19 @@ def parse_topic_source_file(file_bytes: bytes, filename: str) -> TopicSourcePrev
             }
         )
 
+    # F0 strict cho Bộ key có Giai đoạn/Loại; file V1.6 vẫn đọc được.
+    if best_kw and "funnel_stage" in best_kw[2]:
+        for item in preview.content_items:
+            def error(code: str, column: str, row: int, message: str):
+                preview.warnings.append({"code": code, "severity": "ERROR", "sheet": item["source_sheet"], "row": row, "column": column, "message": message})
+            records = item["keyword_rows"]
+            if sum(r["role"] == "PRIMARY" for r in records) != 1:
+                error("F0-KEY-CHINH", "Loại", item["source_row"], "Mỗi mã nội dung phải có đúng một key Chính.")
+            if item["topic_pillar_code"] not in valid_tp_codes:
+                error("F0-PILLAR", "Mã nội dung gốc", item["source_row"], "Mã pillar không có trong bảng Topic Pillar.")
+            for record in records:
+                if record["funnel_stage"] not in {"TOFU", "MOFU", "BOFU"}:
+                    error("F0-GIAI-DOAN", "Giai đoạn", record["source_row"], "Giai đoạn phải là TOFU, MOFU hoặc BOFU.")
     preview.stats = {
         "topic_pillars_count": len(preview.topic_pillars),
         "content_items_count": len(preview.content_items),

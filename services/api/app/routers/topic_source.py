@@ -73,6 +73,7 @@ async def preview_topic_source(
                 "keywords_header_row": preview.keywords_header_row,
                 "topic_pillars": preview.topic_pillars,
                 "content_items": preview.content_items,
+                "validation_errors": [w for w in preview.warnings if w.get("severity") == "ERROR"],
             },
             ensure_ascii=False,
         ),
@@ -121,6 +122,9 @@ def confirm_topic_source(
     tp_rows = meta.get("topic_pillars") or []
     kw_rows = meta.get("content_items") or []
 
+    if meta.get("validation_errors"):
+        raise HTTPException(status_code=422, detail={"message": "F0 chưa đạt; sửa dữ liệu nguồn trước khi lưu.", "errors": meta["validation_errors"]})
+
     # Persist taxonomy tables cleanly for this project
     db.query(TaxonomyPillar).filter(TaxonomyPillar.project_id == project.id).delete()
     db.query(TopicPillar).filter(TopicPillar.project_id == project.id).delete()
@@ -151,6 +155,8 @@ def confirm_topic_source(
                 topic_type=t.get("topic_type", ""),
                 split_axis=t.get("split_axis", ""),
                 main_topic=t.get("main_topic", ""),
+                notes=t.get("notes", ""),
+                legacy_code=t.get("legacy_code", ""),
                 source_file=upload.filename,
                 source_sheet=t.get("source_sheet", ""),
                 source_row=t.get("source_row"),
@@ -214,6 +220,11 @@ def confirm_topic_source(
     c_code = project.content_code or f"{tp_code}-01"
     ref = f"CONTENT:{c_code}" if project.content_code else f"TOPIC:{tp_code}"
 
+    source_meta = {normalize_text(r["keyword"]): {**r, "content_title": item.get("content_title", "")} for item in kw_rows for r in item.get("keyword_rows", [])}
+    def keyword_metadata(keyword):
+        record = source_meta.get(normalize_text(keyword), {})
+        return {key: record.get(key, "") for key in ("funnel_stage", "title_match_check", "content_title", "subtopic", "planner_volume")}
+
     if pk:
         db.add(
             SourceKeyword(
@@ -221,6 +232,7 @@ def confirm_topic_source(
                 topic_pillar_code=tp_code,
                 content_code=c_code,
                 keyword=pk,
+                **keyword_metadata(pk),
                 keyword_normalized=normalize_text(pk),
                 role="PRIMARY",
                 is_original=True,
@@ -236,6 +248,7 @@ def confirm_topic_source(
                 topic_pillar_code=tp_code,
                 content_code=c_code,
                 keyword=sk,
+                **keyword_metadata(sk),
                 keyword_normalized=normalize_text(sk),
                 role="SECONDARY",
                 is_original=True,
