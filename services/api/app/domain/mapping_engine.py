@@ -17,6 +17,7 @@ from app.domain.eligibility_policy import (
     select_effective_metrics_row,
 )
 from app.domain.taxonomy_parser import normalize_text
+from app.knowledge import priority_for
 from app.models import (
     Approval,
     ArticleOpportunity,
@@ -27,6 +28,7 @@ from app.models import (
     KeywordMapping,
     MappingRevision,
     Project,
+    SourceKeyword,
 )
 
 
@@ -450,6 +452,12 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
                 }
             )
 
+    if not project.content_code:
+        source_rows = db.query(SourceKeyword).filter_by(project_id=project.id).all()
+        primaries = [r for r in source_rows if r.role == "PRIMARY"]
+        if len(primaries) > 1:
+            source_units = [{"logical_key": f"source:{r.content_code}", "dg": None, "name": r.content_title or r.keyword, "seeds": [r.keyword], "related": [s.keyword for s in source_rows if s.content_code == r.content_code and s.role != "PRIMARY"], "page_type": "ARTICLE", "coverage_type": "COVERED", "evidence": [r.source_ref], "missing": [], "business_note": ""} for r in primaries]
+
     seen_logical_keys: set[str] = set()
     active_mappings: list[KeywordMapping] = []
     new_approvals_count = 0
@@ -493,16 +501,9 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
 
         counts_for_article = page_type == "ARTICLE"
 
-        has_biz = bool((project.business_goal or "").strip() or (unit["business_note"] or "").strip())
-        if idx == 0 or (m_row and m_row.volume is not None and m_row.volume >= 500 and has_biz):
-            priority = "P1"
-            biz_val = "HIGH"
-        elif has_biz or (m_row and m_row.volume is not None and m_row.volume >= 100):
-            priority = "P2"
-            biz_val = "HIGH" if has_biz else "MEDIUM"
-        else:
-            priority = "P3"
-            biz_val = "MEDIUM"
+        priority, priority_reason = priority_for(m_row.volume if m_row else None, m_row.kd if m_row else None)
+        biz_val = "HIGH" if priority == "P1" else "MEDIUM"
+        unit["business_note"] = priority_reason
 
         effort = "HIGH" if page_type in ("TOOL", "PRODUCT") else ("LOW" if page_type == "DOWNLOAD" else "MEDIUM")
 

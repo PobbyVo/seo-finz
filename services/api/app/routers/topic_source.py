@@ -258,6 +258,17 @@ def confirm_topic_source(
             )
         )
 
+    if payload.source_scope == "PILLAR":
+        db.query(SourceKeyword).filter_by(project_id=project.id).delete()
+        for item in kw_rows:
+            if item.get("topic_pillar_code") != tp_code:
+                continue
+            records = item.get("keyword_rows") or [{"keyword": item["primary_keyword"], "role": "PRIMARY"}] + [{"keyword": k, "role": "SECONDARY"} for k in item.get("secondary_keywords", [])]
+            for record in records:
+                db.add(SourceKeyword(project_id=project.id, topic_pillar_code=tp_code, content_code=item["content_code"], keyword=record["keyword"], keyword_normalized=normalize_text(record["keyword"]), role=record["role"], source_ref=f"CONTENT:{item['content_code']}", source_file=upload.filename, source_sheet=item.get("source_sheet", ""), source_row=record.get("source_row"), **keyword_metadata(record["keyword"])))
+        project.content_code = ""
+        project.content_title = ""
+
     db.add(
         ProjectSnapshot(
             project_id=project.id,

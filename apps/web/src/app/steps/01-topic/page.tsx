@@ -43,6 +43,7 @@ export default function Step01TopicPage() {
   const [topicType, setTopicType] = useState('');
   const [splitAxis, setSplitAxis] = useState('');
   const [mainTopic, setMainTopic] = useState('');
+  const [wholePillar, setWholePillar] = useState(false);
   const [contentCode, setContentCode] = useState('');
   const [contentTitle, setContentTitle] = useState('');
   const [primaryKeyword, setPrimaryKeyword] = useState('');
@@ -174,6 +175,7 @@ export default function Step01TopicPage() {
             upload_id: preview.upload_id,
             selected_topic_pillar_code: tpCode,
             selected_content_code: contentCode,
+            source_scope: wholePillar ? "PILLAR" : "CONTENT",
             pillar_name: pillarName,
             topic_pillar_name: tpName,
             topic_type: topicType,
@@ -287,7 +289,8 @@ export default function Step01TopicPage() {
           <div className="rounded-xl border border-sky-500/30 bg-sky-950/25 p-3 text-xs text-sky-200">{infoNotice}</div>
         )}
 
-        {preview && (
+        <label className="flex gap-2 text-sm"><input type="checkbox" checked={wholePillar} onChange={e=>setWholePillar(e.target.checked)}/>Nghiên cứu toàn bộ mã nội dung trong pillar khi xác nhận file</label>
+      {preview && (
           <div className="space-y-4 rounded-xl border border-slate-700/80 bg-surface-850 p-4">
             <div className="flex flex-wrap gap-3 text-xs text-slate-300">
               <span>File: <strong className="text-white">{preview.filename}</strong></span>

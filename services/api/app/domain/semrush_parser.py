@@ -134,13 +134,13 @@ def normalize_serp_result_type(raw_type: Any) -> str:
 def infer_page_type_from_url(url: str | None, title: str | None = None) -> str:
     """Hypothesis-only page-type inference from URL/title."""
     combined = f"{url or ''} {title or ''}".lower()
-    if any(k in combined for k in ("/tool", "/tinh-", "calculator", "cong-cu", "tính ", "quy-doi")):
+    if any(k in combined for k in ("/tool", "calculator", "cong-cu", "quy-doi")):
         return "TOOL"
     if any(k in combined for k in (".pdf", ".xlsx", ".docx", "download", "template", "bieu-mau", "mau-", "tải ")):
         return "DOWNLOAD"
     if any(k in combined for k in ("/service", "/dich-vu", "tu-van", "dịch vụ")):
         return "SERVICE"
-    if any(k in combined for k in ("/product", "/san-pham", "/pricing", "/khoa-hoc", "bảng giá")):
+    if any(k in combined for k in ("/product", "/san-pham", "/pricing", "bảng giá")):
         return "PRODUCT"
     if url:
         return "ARTICLE"

@@ -648,6 +648,7 @@ def run_ai_critic(project_id: str, payload: CriticRunRequest, db: Session = Depe
         "demand_groups": [{"name": g.name, "page_type": g.assumed_page_type, "status": g.status} for g in dgs],
         **summary,
         "gates": gates["gates"],
+        "evidence_rows": [{"id": row.id, "source_row": row.source_row_number, "batch_id": row.batch_id, "keyword": row.keyword, "volume": row.volume, "kd": row.kd, "intent": row.intent, "url": row.organic_url, "position": row.organic_position, "title": row.organic_title, "raw": json.loads(row.raw_row_json or "{}")} for row in db.query(EvidenceRow).filter_by(project_id=project.id).all()],
     }
 
     try:
@@ -825,3 +826,29 @@ def reopen_research_cycle(project_id: str, db: Session = Depends(get_db)):
     )
     db.commit()
     return {"ok": True, "research_cycle": project.research_cycle}
+
+@router.post('/research-tickets')
+def create_research_tickets(project_id: str, db: Session = Depends(get_db)):
+    """Lượt 1: phiếu VN, chỉ từ dữ liệu nguồn đã được người dùng xác nhận."""
+    project=db.get(Project,project_id)
+    if not project: raise HTTPException(404,'Không tìm thấy dự án.')
+    source=db.query(SourceKeyword).filter_by(project_id=project_id).all()
+    if not source: raise HTTPException(422,'F0: cần xác nhận Bộ key trước khi tạo phiếu.')
+    primary=[r for r in source if r.role=='PRIMARY']
+    tickets=[]
+    keywords=list(dict.fromkeys(r.keyword for r in source))
+    for offset in range(0,len(keywords),100):
+        tickets.append({'report_type':'KEYWORD_OVERVIEW','keywords':keywords[offset:offset+100], 'filename':f'Overview-{project.topic_pillar_name or project.code}-lo{offset//100+1}.csv'})
+    for row in primary:
+        for kind,prefix in [('RELATED','Related'),('QUESTIONS','Questions'),('ORGANIC_RESULTS','SERP')]:
+            tickets.append({'report_type':kind,'keywords':[row.keyword], 'filename':f'{prefix}-{row.keyword}.csv'})
+    for ticket in tickets:
+        seed='\n'.join(ticket['keywords'])
+        existing=db.query(ResearchRequest).filter_by(project_id=project_id,seed_keyword=seed,report_type=ticket['report_type'],research_cycle=project.research_cycle).first()
+        if not existing:
+            existing=ResearchRequest(project_id=project_id,seed_keyword=seed,report_type=ticket['report_type'],market='VN',research_cycle=project.research_cycle,origin='SOURCE_V2',purpose=f"Xuất {ticket['filename']}; database VN. Key dài từ 8 từ: cân nhắc biến thể ngắn, cần người duyệt.")
+            db.add(existing);db.flush()
+        ticket['id']=existing.id
+        ticket['market']='VN'
+    db.commit()
+    return {'tickets':tickets,'message':'Xuất file trên Semrush rồi tải lên Bước 04.'}

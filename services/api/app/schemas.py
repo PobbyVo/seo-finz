@@ -48,6 +48,7 @@ class ProjectUpdateRequest(BaseModel):
 
 
 class TopicSourceConfirmRequest(BaseModel):
+    source_scope: str = "CONTENT"
     upload_id: str
     selected_topic_pillar_code: str = ""
     selected_content_code: str = ""
