@@ -28,6 +28,7 @@ from app.models import (
     KeywordMapping,
     MappingRevision,
     Project,
+    ProjectEvent,
     SourceKeyword,
 )
 
@@ -385,7 +386,7 @@ def reconcile_project_freshness(
     }
 
 
-def build_keyword_mapping_preview(db: Session, project: Project, *, create_approvals: bool = True) -> dict[str, Any]:
+def build_keyword_mapping_preview(db: Session, project: Project, *, create_approvals: bool = True, target_mapping_id: str | None = None) -> dict[str, Any]:
     """
     Non-destructive, idempotent Keyword Mapping & Article Opportunities builder.
     Consumes the EXACT same single-snapshot SERP & semantic metrics fingerprint policy as `eligibility_policy.py`.
@@ -458,6 +459,31 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         if len(primaries) > 1:
             source_units = [{"logical_key": f"source:{r.content_code}", "dg": None, "name": r.content_title or r.keyword, "seeds": [r.keyword], "related": [s.keyword for s in source_rows if s.content_code == r.content_code and s.role != "PRIMARY"], "page_type": "ARTICLE", "coverage_type": "COVERED", "evidence": [r.source_ref], "missing": [], "business_note": ""} for r in primaries]
 
+    # Tài nguyên rõ loại được đưa vào backlog riêng, không tăng quota ARTICLE.
+    if not project.content_code:
+        source_rows = db.query(SourceKeyword).filter_by(project_id=project.id).all()
+        from app.domain.research_business import infer_query_asset as _guess_page_type
+        existing_seeds = {normalize_text(k) for unit in source_units for k in unit["seeds"]}
+        for source in source_rows:
+            kind = _guess_page_type(source.keyword)
+            if kind in {"TOOL", "DOWNLOAD", "UNKNOWN"} and source.keyword_normalized not in existing_seeds:
+                source_units.append({"logical_key":f"asset:{source.keyword_normalized}","dg":None,"name":source.keyword,"seeds":[source.keyword],"related":[],"page_type":kind,"coverage_type":"GAP","evidence":[source.source_ref],"missing":[],"business_note":"Backlog tài nguyên; FinZ hiện chỉ sản xuất bài viết."})
+
+    latest_analysis = {}
+    for event in db.query(ProjectEvent).filter_by(project_id=project.id).order_by(ProjectEvent.created_at.asc()).all():
+        analysis = json.loads(event.details_json or "{}").get("serp_analysis")
+        if analysis:latest_analysis[normalize_text(analysis["keyword"])]=analysis
+    for unit in source_units:
+        analysis=latest_analysis.get(normalize_text(unit["seeds"][0]),{}) if unit["seeds"] else {}
+        if analysis.get("decision")=="BACKLOG" and analysis.get("distribution"):
+            unit["page_type"]=max(analysis["distribution"],key=analysis["distribution"].get)
+
+    target_mapping = next((m for m in existing_mappings if m.id == target_mapping_id), None) if target_mapping_id else None
+    if target_mapping_id and target_mapping is None:
+        raise ValueError("Không tìm thấy dòng mapping cần chạy lại.")
+    if target_mapping:
+        source_units = [u for u in source_units if u["logical_key"] == target_mapping.logical_key or (u["seeds"] and normalize_text(u["seeds"][0]) == normalize_text(target_mapping.primary_keyword))]
+
     seen_logical_keys: set[str] = set()
     active_mappings: list[KeywordMapping] = []
     new_approvals_count = 0
@@ -468,7 +494,9 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
     gap_count = 0
 
     # Rebuild derived opportunities view cleanly (KeywordMapping & BriefVersion history are NEVER deleted)
-    db.query(ArticleOpportunity).filter(ArticleOpportunity.project_id == project.id).delete()
+    opportunity_query = db.query(ArticleOpportunity).filter(ArticleOpportunity.project_id == project.id)
+    if target_mapping_id:opportunity_query=opportunity_query.filter(ArticleOpportunity.keyword_mapping_id==target_mapping_id)
+    opportunity_query.delete()
 
     for idx, unit in enumerate(source_units):
         lkey = unit["logical_key"]
@@ -499,6 +527,10 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         if serp_sufficient and serp_eval["dominant_page_type_hypothesis"] in {"ARTICLE", "TOOL", "DOWNLOAD", "SERVICE", "PRODUCT"}:
             page_type = serp_eval["dominant_page_type_hypothesis"]
 
+        analysis = latest_analysis.get(pk_norm, {})
+        if analysis.get("selected_batch_id") == serp_eval.get("selected_batch_id") and analysis.get("decision") == "BACKLOG" and analysis.get("distribution"):
+            dominant_ai=max(analysis["distribution"], key=analysis["distribution"].get)
+            page_type="UNKNOWN" if dominant_ai=="DATA" else dominant_ai
         counts_for_article = page_type == "ARTICLE"
 
         priority, priority_reason = priority_for(m_row.volume if m_row else None, m_row.kd if m_row else None)
@@ -665,7 +697,10 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         km.content_status = decision["recommended_content_status"]
         active_mappings.append(km)
 
-        if m_row is None:
+        if not counts_for_article:
+            opp_kind = "NON_ARTICLE_ASSET"
+            non_article_count += 1
+        elif m_row is None:
             opp_kind = "RESEARCH_GAP"
             gap_count += 1
         elif counts_for_article:
@@ -693,6 +728,8 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         )
 
     for em in existing_mappings:
+        if target_mapping_id and em.id != target_mapping_id:
+            continue
         em_key = em.logical_key or (f"dg:{em.demand_group_id}" if em.demand_group_id else f"kw:{normalize_text(em.primary_keyword)}")
         if em_key not in seen_logical_keys and not em.is_archived:
             em.is_archived = True

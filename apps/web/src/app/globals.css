@@ -262,3 +262,15 @@ dialog::backdrop {
   border: 0 !important;
   white-space: nowrap !important;
 }
+
+/* Các điều khiển nghiệp vụ V2 dùng cùng token tối hiện có. */
+.finz-v2-input:not([type="checkbox"]) {
+  @apply rounded-xl border border-slate-700 bg-surface-900 px-3 py-2 text-sm text-slate-100;
+  min-width: 0;
+}
+.finz-v2-primary {
+  @apply inline-flex items-center justify-center rounded-xl bg-sky-500 px-4 py-2.5 text-sm font-semibold text-slate-950 hover:bg-sky-400 disabled:opacity-50;
+}
+.finz-v2-secondary {
+  @apply inline-flex items-center justify-center rounded-xl border border-slate-700 bg-surface-900 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800 disabled:opacity-50;
+}

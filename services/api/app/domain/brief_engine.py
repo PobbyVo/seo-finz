@@ -10,7 +10,7 @@ from app.domain.eligibility_policy import (
     evaluate_mapping_eligibility,
     load_project_policy_context,
 )
-from app.domain.brief_writer import write_brief
+from app.domain.brief_writer import write_brief, mock_brief
 from app.knowledge import load_thresholds
 from app.models import BriefVersion, ContentBrief, KeywordMapping, Project
 
@@ -85,7 +85,7 @@ def _select_writing_strategy(mapping: KeywordMapping) -> dict[str, Any]:
         tactics = [ENGAGEMENT_TACTICS[0], ENGAGEMENT_TACTICS[4], ENGAGEMENT_TACTICS[5], ENGAGEMENT_TACTICS[9], ENGAGEMENT_TACTICS[11], ENGAGEMENT_TACTICS[15]]
 
     openings = [
-        f"Tình huống thực tế: Khi xử lý '{kw}', nhiều đội ngũ dễ bỏ sót điểm mấu chốt gây tốn thời gian — dưới đây là hướng dẫn có kiểm chứng từng bước.",
+        f"Tình huống thực tế: Khi xử lý '{kw}', nhiều bạn dễ bỏ sót điểm mấu chốt gây tốn thời gian — dưới đây là hướng dẫn có kiểm chứng từng bước.",
         f"Câu hỏi trực diện: Bạn cần giải quyết vấn đề gì về '{kw}' trước tiên? Hãy xem tóm tắt nhanh 3 điểm cốt lõi ngay bên dưới.",
     ]
 
@@ -143,6 +143,14 @@ def generate_content_briefs(
         )
 
     decisions = {km.id: evaluate_mapping_eligibility(project, km, ctx) for km in mappings}
+    from app.domain.research_business import mapping_handoff, record_decision
+    for mapping in mappings:
+        handoff=mapping_handoff(db,project,mapping)
+        if not mapping.is_approved:record_decision(db,project.id,"V-CHUA-DUYET",f"{mapping.primary_keyword}: chưa duyệt mapping hiện hành.",needs_review=True,mapping_id=mapping.id)
+        analysis=handoff.get("analysis",{})
+        if handoff.get("funnel_stage") and (analysis.get("decision") != "ARTICLE" or analysis.get("selected_batch_id") != decisions[mapping.id]["serp_evidence"].get("selected_batch_id")):
+            record_decision(db,project.id,"V-THIEU-DU-LIEU",f"{mapping.primary_keyword}: cần phân tích SERP hiện hành trước khi viết chính thức.",needs_review=True,mapping_id=mapping.id)
+            decisions[mapping.id] = {**decisions[mapping.id], "eligible_official":False, "recommended_content_status":"RESEARCH_REQUIRED", "blockers":[*decisions[mapping.id]["blockers"], {"code":"V-THIEU-DU-LIEU", "reason":"Cổng nghiệp vụ V2: cần phân tích SERP hiện hành kết luận đủ điều kiện bài viết.", "impact":"Chỉ được tạo bản nháp.", "solution":"Chạy F5 và duyệt mapping hiện hành."}]}
     eligible_list = [km for km in mappings if decisions[km.id]["eligible_official"]]
     ineligible_list = [km for km in mappings if not decisions[km.id]["eligible_official"]]
 
@@ -189,7 +197,8 @@ def generate_content_briefs(
 
         brief_mode = "OFFICIAL" if is_official else "DRAFT"
         status = "READY_FOR_BRIEF" if is_official else dec["recommended_content_status"]
-        br_code = f"BR-{project_tag}-{idx:02d}"
+        from app.domain.research_business import article_code_for
+        br_code = article_code_for(db, project.id, km.id)
         secondary_kws = json.loads(km.secondary_keywords_json or "[]")
         writing_strategy = _select_writing_strategy(km)
         serp_ev = dec["serp_evidence"]
@@ -235,39 +244,10 @@ def generate_content_briefs(
             else f"Giải quyết nhu cầu tìm kiếm cốt lõi quanh '{km.primary_keyword}' dựa trên bằng chứng đã thu thập."
         )
 
-        title_variants = [
-            f"{km.primary_keyword.capitalize()}: Hướng Dẫn Chi Tiết & Lưu Ý Thực Tế ({project_tag})",
-            f"Cách Áp Dụng {km.primary_keyword.capitalize()} Đúng Chuẩn Cho {project.target_audience or 'Người Mới'}",
-        ]
-
-        outline = [
-            {
-                "level": "H2",
-                "heading": f"Tổng quan nhanh về {km.primary_keyword}",
-                "notes": "Trả lời trực diện câu hỏi cốt lõi ngay phần đầu, trình bày rõ phạm vi bài viết.",
-                "children": [
-                    {"level": "H3", "heading": f"Bản chất và khi nào cần áp dụng {km.primary_keyword}"},
-                    {"level": "H3", "heading": "Những hiểu nhầm thường gặp cần tránh"},
-                ],
-            },
-            {
-                "level": "H2",
-                "heading": f"Quy trình / Hướng dẫn triển khai {km.primary_keyword} từng bước",
-                "notes": "Minh họa bằng bảng tóm tắt hoặc ví dụ thực tế có nguồn xác thực (không bịa số liệu).",
-                "children": [
-                    {"level": "H3", "heading": "Chuẩn bị thông tin & điều kiện đầu vào"},
-                    {"level": "H3", "heading": "Các bước thực hiện và điểm cần kiểm tra"},
-                ],
-            },
-            {
-                "level": "H2",
-                "heading": f"Tình huống thực tế & câu hỏi thường gặp về {km.primary_keyword}",
-                "notes": "Lồng ghép tự nhiên các từ khóa phụ liên quan theo ngữ cảnh.",
-                "children": [
-                    {"level": "H3", "heading": f"Giải đáp vướng mắc phổ biến ({', '.join(secondary_kws[:2]) or km.primary_keyword})"},
-                ],
-            },
-        ]
+        # Seed dự phòng theo keyword nguồn, chỉ xuất bản dự phòng nếu AI thất bại.
+        seed = mock_brief({"primary_keyword":km.primary_keyword,"secondary_keywords":secondary_kws,"target_audience":audience,"other_mappings":[]})
+        title_variants = seed["title_variants"]
+        outline = seed["outline"]
 
         serp_check_note = (
             f"Đã xác minh Top 10 SERP đầy đủ ({serp_ev['valid_organic_count']} URL organic)."
@@ -287,13 +267,7 @@ def generate_content_briefs(
             serp_check_note,
         ]
 
-        internal_links = [
-            {
-                "anchor": project.topic_pillar_name or project.main_topic or project.name,
-                "target_url": f"/{(project.topic_pillar_code or project.code or 'topic-pillar').lower()}",
-                "reason": "Điều hướng về trang Topic Pillar trung tâm để củng cố cấu trúc cụm chủ đề.",
-            }
-        ]
+        internal_links = []
 
         # Match existing brief by stable keyword_mapping_id first, then fallback to br_code
         existing = (
@@ -301,12 +275,6 @@ def generate_content_briefs(
             .filter(ContentBrief.project_id == project.id, ContentBrief.keyword_mapping_id == km.id)
             .first()
         )
-        if existing is None:
-            existing = (
-                db.query(ContentBrief)
-                .filter(ContentBrief.project_id == project.id, ContentBrief.br_code == br_code)
-                .first()
-            )
 
         if existing:
             brief = existing
@@ -345,16 +313,9 @@ def generate_content_briefs(
         brief.search_intent_summary = intent_summary
         brief.article_goal = goal
         brief.seo_title = title_variants[0]
-        brief.h1 = f"{km.primary_keyword.capitalize()}: Hướng Dẫn Thực Tế & Checklist Áp Dụng"
-        brief.meta_description = (
-            f"Tìm hiểu {km.primary_keyword} rõ ràng, dễ áp dụng kèm ví dụ thực tế và checklist kiểm tra. "
-            f"Phù hợp cho {project.target_audience or 'độc giả cần hướng dẫn có kiểm chứng'}."
-        )
-        brief.cta = (
-            f"Đăng ký nhận tư vấn / tài nguyên chuyên sâu gắn với mục tiêu: {project.business_goal}."
-            if project.business_goal
-            else f"Tải checklist hoặc xem thêm các bài liên quan trong nhóm {project.topic_pillar_name or project.name}."
-        )
+        brief.h1 = seed["h1"]
+        brief.meta_description = seed["meta_description"]
+        brief.cta = seed["cta"]
         brief.internal_links_json = json.dumps(internal_links, ensure_ascii=False)
         brief.outline_json = json.dumps(outline, ensure_ascii=False)
         brief.seo_checklist_json = json.dumps(checklist, ensure_ascii=False)
@@ -371,6 +332,9 @@ def generate_content_briefs(
         brief.outline_json = json.dumps(payload["outline"], ensure_ascii=False)
         brief.internal_links_json = json.dumps(payload["internal_links"], ensure_ascii=False)
         brief.seo_checklist_json = json.dumps(payload["checklist"] + payload["legal_sources"], ensure_ascii=False)
+        if payload.get("primary_formula") in {f["id"] for f in WRITING_FORMULAS}:writing_strategy["primary_formula"]=payload["primary_formula"]
+        selected_tactics=[t for t in ENGAGEMENT_TACTICS if t["code"] in payload.get("tactic_codes",[])]
+        if 3 <= len(selected_tactics) <= 6:writing_strategy["engagement_tactics"]=selected_tactics
         writing_strategy.update({"title_variants":payload["title_variants"], "faq":payload["faq"], "legal_sources":payload["legal_sources"], "word_count_reference":payload["word_count_reference"], "serp_references":payload["serp_references"], "generation_source":"AI" if not writer_errors else "FALLBACK", "quality_errors":writer_errors})
         brief.writing_strategy_json = json.dumps(writing_strategy, ensure_ascii=False)
         if writer_errors:

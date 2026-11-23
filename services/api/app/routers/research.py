@@ -188,6 +188,13 @@ async def preview_semrush_import(
 
     suggested = suggest_column_mapping(headers, rt)
     resolved_target_kw = (target_keyword or (req.seed_keyword if req else "") or "").strip()
+    if not resolved_target_kw and rt == "ORGANIC_RESULTS":
+        from app.domain.mapping_engine import slugify_vi
+        stem=Path(filename).stem
+        if stem.lower().startswith("serp-"):
+            stem=stem[5:]
+            matches=[r.keyword for r in db.query(SourceKeyword).filter_by(project_id=project.id,role="PRIMARY").all() if slugify_vi(r.keyword)==slugify_vi(stem)]
+            if len(set(matches))==1:resolved_target_kw=matches[0]
 
     upload = FileUpload(
         project_id=project.id,
@@ -622,12 +629,14 @@ def run_ai_critic(project_id: str, payload: CriticRunRequest, db: Session = Depe
         )
         .count()
     )
-    if existing_rounds >= settings.max_critique_rounds_per_cycle:
+    from app.knowledge import load_thresholds
+    critique_limit = load_thresholds()["max_supplement_rounds"]
+    if existing_rounds >= critique_limit:
         raise HTTPException(
             status_code=409,
             detail={
                 "code": "CRITIQUE_ROUND_LIMIT_REACHED",
-                "reason": f"Đã đạt giới hạn tối đa {settings.max_critique_rounds_per_cycle} lượt AI Critic trong chu kỳ nghiên cứu #{project.research_cycle}.",
+                "reason": f"Đã đạt giới hạn tối đa {critique_limit} lượt AI Critic trong chu kỳ nghiên cứu #{project.research_cycle}.",
                 "impact": "Hệ thống dừng tự động phản biện để tránh vòng lặp vô hạn.",
                 "solution": "Upload thêm file bằng chứng Semrush mới và bấm 'Mở chu kỳ nghiên cứu mới', hoặc chuyển sang Bước 06 lập kế hoạch.",
                 "next_action": "Mở chu kỳ nghiên cứu mới sau khi bổ sung evidence hoặc chuyển sang Bước 06.",
@@ -827,28 +836,312 @@ def reopen_research_cycle(project_id: str, db: Session = Depends(get_db)):
     db.commit()
     return {"ok": True, "research_cycle": project.research_cycle}
 
-@router.post('/research-tickets')
+@router.post("/research-tickets")
 def create_research_tickets(project_id: str, db: Session = Depends(get_db)):
     """Lượt 1: phiếu VN, chỉ từ dữ liệu nguồn đã được người dùng xác nhận."""
-    project=db.get(Project,project_id)
-    if not project: raise HTTPException(404,'Không tìm thấy dự án.')
-    source=db.query(SourceKeyword).filter_by(project_id=project_id).all()
-    if not source: raise HTTPException(422,'F0: cần xác nhận Bộ key trước khi tạo phiếu.')
-    primary=[r for r in source if r.role=='PRIMARY']
-    tickets=[]
-    keywords=list(dict.fromkeys(r.keyword for r in source))
-    for offset in range(0,len(keywords),100):
-        tickets.append({'report_type':'KEYWORD_OVERVIEW','keywords':keywords[offset:offset+100], 'filename':f'Overview-{project.topic_pillar_name or project.code}-lo{offset//100+1}.csv'})
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Không tìm thấy dự án.")
+    source = db.query(SourceKeyword).filter_by(project_id=project_id).all()
+    if not source:
+        raise HTTPException(422, "F0: cần xác nhận Bộ key trước khi tạo phiếu.")
+    from app.domain.research_business import preflight, record_decision
+
+    source, decisions = preflight(source, project.topic_pillar_code or project.code)
+    for decision in decisions:
+        record_decision(
+            db,
+            project_id,
+            decision["code"],
+            decision["message"],
+            needs_review=decision["needs_review"],
+            keyword=decision["keyword"],
+        )
+    if any(d["code"] == "F2-HAI-MA" for d in decisions):
+        db.commit()
+        raise HTTPException(
+            409,
+            {
+                "code": "F2-HAI-MA",
+                "reason": "Keyword nằm ở hai mã; cần người duyệt nguồn trước khi tạo phiếu.",
+                "decisions": decisions,
+            },
+        )
+    primary = [r for r in source if r.role == "PRIMARY"]
+    tickets = []
+    keywords = list(dict.fromkeys(r.keyword for r in source))
+    for offset in range(0, len(keywords), 100):
+        tickets.append(
+            {
+                "report_type": "KEYWORD_OVERVIEW",
+                "keywords": keywords[offset : offset + 100],
+                "filename": f"Overview-{project.topic_pillar_name or project.code}-lo{offset//100+1}.csv",
+            }
+        )
     for row in primary:
-        for kind,prefix in [('RELATED','Related'),('QUESTIONS','Questions'),('ORGANIC_RESULTS','SERP')]:
-            tickets.append({'report_type':kind,'keywords':[row.keyword], 'filename':f'{prefix}-{row.keyword}.csv'})
+        for kind, prefix in [
+            ("RELATED", "Related"),
+            ("QUESTIONS", "Questions"),
+            ("ORGANIC_RESULTS", "SERP"),
+        ]:
+            tickets.append(
+                {
+                    "report_type": kind,
+                    "keywords": [row.keyword],
+                    "filename": f"{prefix}-{row.keyword}.csv",
+                }
+            )
     for ticket in tickets:
-        seed='\n'.join(ticket['keywords'])
-        existing=db.query(ResearchRequest).filter_by(project_id=project_id,seed_keyword=seed,report_type=ticket['report_type'],research_cycle=project.research_cycle).first()
+        seed = "\n".join(ticket["keywords"])
+        existing = (
+            db.query(ResearchRequest)
+            .filter_by(
+                project_id=project_id,
+                seed_keyword=seed,
+                report_type=ticket["report_type"],
+                research_cycle=project.research_cycle,
+            )
+            .first()
+        )
         if not existing:
-            existing=ResearchRequest(project_id=project_id,seed_keyword=seed,report_type=ticket['report_type'],market='VN',research_cycle=project.research_cycle,origin='SOURCE_V2',purpose=f"Xuất {ticket['filename']}; database VN. Key dài từ 8 từ: cân nhắc biến thể ngắn, cần người duyệt.")
-            db.add(existing);db.flush()
-        ticket['id']=existing.id
-        ticket['market']='VN'
+            existing = ResearchRequest(
+                project_id=project_id,
+                seed_keyword=seed,
+                report_type=ticket["report_type"],
+                market="VN",
+                research_cycle=project.research_cycle,
+                origin="SOURCE_V2",
+                purpose=f"Xuất {ticket['filename']}; database VN. Key dài từ 8 từ: cân nhắc biến thể ngắn, cần người duyệt.",
+            )
+            db.add(existing)
+            db.flush()
+        ticket["id"] = existing.id
+        ticket["market"] = "VN"
     db.commit()
-    return {'tickets':tickets,'message':'Xuất file trên Semrush rồi tải lên Bước 04.'}
+    return {
+        "tickets": tickets,
+        "message": "Xuất file trên Semrush rồi tải lên Bước 04.",
+    }
+
+
+@router.post("/serp-analysis")
+def analyze_serp_business(
+    project_id: str, keyword: str | None = None, db: Session = Depends(get_db)
+):
+    from collections import Counter
+    from app.ai.prompts import SERP_ANALYST_SYSTEM_PROMPT
+    from app.knowledge import load_thresholds
+    from app.domain.eligibility_policy import (
+        load_project_policy_context,
+        evaluate_serp_for_keyword,
+    )
+    from app.domain.serp_reader import read_article
+    from app.domain.research_business import record_decision
+
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Không tìm thấy dự án.")
+    policy = load_project_policy_context(db, project)
+    thresholds = load_thresholds()
+    results = []
+    primaries = (
+        db.query(SourceKeyword).filter_by(project_id=project_id, role="PRIMARY").all()
+    )
+    for source in primaries:
+        if keyword and source.keyword != keyword:
+            continue
+        eligible = evaluate_serp_for_keyword(
+            project,
+            source.keyword,
+            policy["evidence_rows"],
+            policy["batches_by_id"],
+            policy["uploads_by_id"],
+            batch_integrity_by_id=policy["batch_integrity_by_id"],
+        )
+        batch_id = eligible.get("selected_batch_id")
+        rows = [
+            r
+            for r in policy["evidence_rows"]
+            if r.keyword_normalized == source.keyword_normalized
+            and r.batch_id == batch_id
+            and r.row_type == "ORGANIC_RESULTS"
+            and r.organic_valid
+            and r.serp_result_type == "ORGANIC"
+            and r.organic_position
+            and 1 <= r.organic_position <= 10
+        ]
+        positions = {}
+        for row in sorted(
+            rows, key=lambda r: (r.organic_position, r.source_row_number)
+        ):
+            positions.setdefault(row.organic_position, row)
+        rows = list(positions.values())
+        pages = (
+            [read_article(r.organic_url) for r in rows[: thresholds["read_pages_max"]]]
+            if thresholds["fetch_serp_pages"]
+            else []
+        )
+        context = {
+            "task": "SERP_ANALYST",
+            "keyword": source.keyword,
+            "assigned_funnel_stage": source.funnel_stage,
+            "content_angle": source.content_title,
+            "pages": pages,
+            "evidence_rows": [
+                {
+                    "id": r.id,
+                    "source_row": r.source_row_number,
+                    "url": r.organic_url,
+                    "title": r.organic_title,
+                    "domain": r.organic_domain,
+                    "raw": json.loads(r.raw_row_json or "{}"),
+                }
+                for r in rows
+            ],
+        }
+        try:
+            response, _ = gateway.generate_structured(
+                db,
+                project_id=project_id,
+                role="SERP_ANALYST",
+                system_prompt=SERP_ANALYST_SYSTEM_PROMPT,
+                user_prompt=json.dumps(context, ensure_ascii=False),
+                context=context,
+                research_cycle=project.research_cycle,
+            )
+        except AIProviderError as exc:
+            raise HTTPException(400, exc.error.to_dict())
+        read_urls = {page["url"] for page in pages if page.get("read_status") == "READ"}
+        response.data["mandatory_ideas"] = [
+            idea["idea"]
+            for idea in response.data.get("idea_evidence", [])
+            if isinstance(idea, dict)
+            and isinstance(idea.get("idea"), str)
+            and len(set(idea.get("urls", [])) & read_urls)
+            >= thresholds["mandatory_idea_min_pages"]
+        ]
+        if len(read_urls) < thresholds["read_pages_min"]:
+            response.data["gaps"] = []
+        counts = [
+            page["word_count"] for page in pages if page.get("read_status") == "READ"
+        ]
+        response.data["length_reference"] = (
+            f"{min(counts)}–{max(counts)} từ từ {len(counts)} bài đã đọc (tham khảo)"
+            if len(counts) >= thresholds["read_pages_min"]
+            else "Chưa đủ bài đã đọc; không suy đoán độ dài."
+        )
+        response.data["serp_features"] = list(
+            dict.fromkeys(r.serp_features for r in rows if r.serp_features)
+        )
+        valid_ids = {r.id for r in rows}
+        labels = [
+            r
+            for r in response.data.get("rows", [])
+            if r.get("evidence_id") in valid_ids
+            and r.get("page_type")
+            in {"ARTICLE", "TOOL", "DOWNLOAD", "SERVICE", "PRODUCT", "DATA", "UNKNOWN"}
+        ]
+        corrections = (
+            db.query(ProjectEvent)
+            .filter_by(project_id=project_id, event_type="SERP_LABEL_CORRECTED")
+            .order_by(ProjectEvent.created_at.asc())
+            .all()
+        )
+        corrected = {
+            json.loads(e.details_json)["evidence_id"]: json.loads(e.details_json)[
+                "page_type"
+            ]
+            for e in corrections
+        }
+        for label in labels:
+            if label["evidence_id"] in corrected:
+                label["page_type"] = corrected[label["evidence_id"]]
+        distribution = dict(Counter(r["page_type"] for r in labels))
+        decision = "WAITING_DATA"
+        reason = "F5-CHO-BO-SUNG"
+        if len(rows) >= 10:
+            dominant = (
+                max(distribution, key=distribution.get) if distribution else "UNKNOWN"
+            )
+            if (
+                dominant in {"TOOL", "DOWNLOAD", "SERVICE", "PRODUCT", "DATA"}
+                and distribution[dominant] >= thresholds["backlog_min_top10"]
+            ):
+                decision = "BACKLOG"
+                reason = (
+                    "F5-BACKLOG-DU-LIEU"
+                    if dominant == "DATA"
+                    else (
+                        "F5-BACKLOG-TEP"
+                        if dominant == "DOWNLOAD"
+                        else "F5-BACKLOG-CONG-CU"
+                    )
+                )
+            elif distribution.get("ARTICLE", 0) >= thresholds["article_min_top10"]:
+                decision = "ARTICLE"
+                reason = "F5-CHUA-XAC-MINH"  # AI page labels remain hypotheses; approval still required.
+        item = {
+            "keyword": source.keyword,
+            "content_code": source.content_code,
+            "funnel_stage": source.funnel_stage,
+            "content_angle": source.content_title,
+            "distribution": distribution,
+            "decision": decision,
+            "analysis": response.data,
+            "pages": pages,
+            "selected_batch_id": batch_id,
+            "serp_tier": eligible["serp_tier"],
+            "top3_strength": [json.loads(r.raw_row_json or "{}") for r in rows[:3]],
+            "companion_article_proposal": decision == "BACKLOG"
+            and distribution.get("ARTICLE", 0) >= thresholds["explanation_min_top10"],
+        }
+        record_decision(
+            db,
+            project_id,
+            reason,
+            f"{source.keyword}: {decision}; phân bố {distribution}; nhãn AI cần duyệt.",
+            needs_review=True,
+            serp_analysis=item,
+        )
+        results.append(item)
+    db.commit()
+    return {
+        "analyses": results,
+        "message": "Nhãn AI là đề xuất; bằng chứng gốc và snapshot được giữ nguyên.",
+    }
+
+
+@router.put("/serp-labels/{evidence_id}")
+def correct_serp_label(
+    project_id: str, evidence_id: str, payload: dict, db: Session = Depends(get_db)
+):
+    row = db.get(EvidenceRow, evidence_id)
+    if not row or row.project_id != project_id or row.row_type != "ORGANIC_RESULTS":
+        raise HTTPException(404, "Không tìm thấy dòng SERP của dự án.")
+    label = payload.get("page_type")
+    if label not in {
+        "ARTICLE",
+        "TOOL",
+        "DOWNLOAD",
+        "SERVICE",
+        "PRODUCT",
+        "DATA",
+        "UNKNOWN",
+    }:
+        raise HTTPException(422, "Loại trang không hợp lệ.")
+    db.add(
+        ProjectEvent(
+            project_id=project_id,
+            event_type="SERP_LABEL_CORRECTED",
+            message=f"Người dùng sửa nhãn {row.organic_url}: {label}",
+            details_json=json.dumps(
+                {"evidence_id": evidence_id, "page_type": label, "needs_review": False},
+                ensure_ascii=False,
+            ),
+        )
+    )
+    db.commit()
+    return {
+        "saved": True,
+        "message": "Đã lưu nhãn nghiệp vụ; file và bằng chứng gốc được giữ nguyên. Chạy lại phân tích SERP và mapping để duyệt phiên bản mới.",
+    }

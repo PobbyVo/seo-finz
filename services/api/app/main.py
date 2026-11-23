@@ -28,7 +28,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="FinZ SEO Workbench V1.6 — Human-in-the-loop Evidence-Based SEO Decision System",
+    description="FinZ SEO Workbench V2.0 — Human-in-the-loop Evidence-Based SEO Decision System",
     lifespan=lifespan,
 )
 

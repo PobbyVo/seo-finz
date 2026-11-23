@@ -42,17 +42,19 @@ interface LogsPayload {
 
 export default function LogsPage() {
   const { activeProject } = useProject();
+  const [reasonCode, setReasonCode] = useState('');
+  const [reviewOnly, setReviewOnly] = useState(false);
   const [data, setData] = useState<LogsPayload | null>(null);
 
   const loadLogs = useCallback(async () => {
     if (!activeProject) return;
     try {
-      const res = await apiRequest<LogsPayload>(`/api/v1/projects/${activeProject.id}/logs`);
+      const res = await apiRequest<LogsPayload>(`/api/v1/projects/${activeProject.id}/logs?reason_code=${encodeURIComponent(reasonCode)}${reviewOnly ? "&needs_review=true" : ""}`);
       setData(res);
     } catch {
       // ignore
     }
-  }, [activeProject]);
+  }, [activeProject, reasonCode, reviewOnly]);
 
   useEffect(() => {
     void loadLogs();
@@ -67,7 +69,7 @@ export default function LogsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6"><div className="flex gap-3"><input className="finz-v2-input" aria-label="Lọc mã lý do" placeholder="Mã lý do, ví dụ F7-TITLE" value={reasonCode} onChange={e=>setReasonCode(e.target.value)}/><label><input type="checkbox" checked={reviewOnly} onChange={e=>setReviewOnly(e.target.checked)}/> Chỉ mục cần duyệt</label></div>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Nhật ký hệ thống, AI Runs & Lịch sử phiên bản</h1>

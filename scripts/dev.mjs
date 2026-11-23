@@ -99,7 +99,7 @@ function pipePrefixed(stream, tag, color) {
 }
 
 function main() {
-  log('FINZ', C.green, 'Khởi động FinZ SEO Workbench V1.6 (Dark Mode, Local-First)...');
+  log('FINZ', C.green, 'Khởi động FinZ SEO Workbench V2.0 (Dark Mode, Local-First)...');
   ensureBackendSetup();
   ensureFrontendSetup();
 

@@ -407,6 +407,12 @@ export default function Step07BriefPage() {
                 </div>
               </div>
 
+              <div className="rounded-xl border border-slate-700 p-4 text-xs space-y-2">
+                <p><strong>Độ dài tham khảo:</strong> {b.writing_strategy.word_count_reference || 'Chưa xác minh'}</p>
+                <p><strong>Nguồn pháp lý cần kiểm:</strong> {(b.writing_strategy.legal_sources || []).join('; ') || 'Xem checklist riêng chủ đề'}</p>
+                <p><strong>FAQ:</strong> {(b.writing_strategy.faq || []).join('; ') || 'Chưa có'}</p>
+                {b.writing_strategy.generation_source === 'FALLBACK' && <p role="alert" className="text-amber-200">Bản dự phòng — cần người sửa: {(b.writing_strategy.quality_errors || []).join('; ')}</p>}
+              </div>
               {/* Writing Strategy (Whole Article Level) */}
               <div className="rounded-xl border border-violet-500/30 bg-violet-950/15 p-4 text-xs space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">

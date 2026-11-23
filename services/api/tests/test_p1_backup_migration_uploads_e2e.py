@@ -431,9 +431,10 @@ def test_e2e_mock_7_step_reproducibility_and_zero_secret_leakage_in_exports(clie
         assert secret_aq.encode("utf-8") not in exp.content
         if fmt == "xlsx":
             wb = openpyxl.load_workbook(io.BytesIO(exp.content))
-            assert wb.sheetnames == ["Keyword Overview", "Keyword Mapping", "SEO Content Brief"]
-            assert wb["Keyword Overview"].max_row == 16  # header + 15 rows
-            assert wb["SEO Content Brief"].max_row >= 2
+            assert len(wb.sheetnames) == 5
+            assert [name.split(" - ")[0] for name in wb.sheetnames] == ["Keyword Research", "SERP Check", "Keyword Mapping", "Nhat ky", "SEO Content Brief"]
+            assert wb.worksheets[0].max_row == 16  # header + 15 rows
+            assert wb.worksheets[4].max_row >= 2
         elif fmt == "json":
             from app.domain.eligibility_policy import POLICY_VERSION
             parsed = json.loads(exp.content.decode("utf-8"))

@@ -347,7 +347,7 @@ def delete_project(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/{project_id}/logs")
-def get_project_logs(project_id: str, db: Session = Depends(get_db)):
+def get_project_logs(project_id: str, reason_code: str | None = None, needs_review: bool | None = None, db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
@@ -359,6 +359,10 @@ def get_project_logs(project_id: str, db: Session = Depends(get_db)):
         .limit(100)
         .all()
     )
+    if reason_code:
+        events = [e for e in events if e.event_type == reason_code]
+    if needs_review is not None:
+        events = [e for e in events if bool(json.loads(e.details_json or "{}").get("needs_review")) == needs_review]
     ai_runs = (
         db.query(AIRun)
         .filter((AIRun.project_id == project_id) | (AIRun.project_id.is_(None)))

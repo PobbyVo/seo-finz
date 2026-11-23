@@ -99,7 +99,7 @@ export default function Step03SemrushPage() {
 
   return (
     <div className="space-y-6">
-      <button className="btn-primary" onClick={async()=>{try { await apiRequest(`/api/v1/projects/${activeProject.id}/research-tickets`,{method:'POST'}); await loadRequests(); setNotice('Đã tạo phiếu VN: Overview theo lô ≤100, Related, Questions và SERP cho từng key chính.'); } catch(e){setNotice(e instanceof Error?e.message:'Không tạo được phiếu.');}}}>Tạo phiếu Semrush từ Bộ key đã xác nhận</button>
+      <button className="finz-v2-primary" onClick={async()=>{try { await apiRequest(`/api/v1/projects/${activeProject.id}/research-tickets`,{method:'POST'}); await loadRequests(); setNotice('Đã tạo phiếu VN: Overview theo lô ≤100, Related, Questions và SERP cho từng key chính.'); } catch(e){setNotice(e instanceof Error?e.message:'Không tạo được phiếu.');}}}>Tạo phiếu Semrush từ Bộ key đã xác nhận</button>
       <div>
         <h1 className="text-2xl font-bold text-slate-100">Bước 03 — Yêu cầu nghiên cứu Semrush</h1>
         <p className="mt-1 text-sm text-slate-400">

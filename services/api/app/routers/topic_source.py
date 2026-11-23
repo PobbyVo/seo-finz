@@ -49,6 +49,9 @@ async def preview_topic_source(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    for warning in preview.warnings:
+        if warning.get("severity") == "ERROR":
+            db.add(ProjectEvent(project_id=project.id,level="WARNING",event_type=warning["code"],message=warning["message"],details_json=json.dumps({**warning,"needs_review":True},ensure_ascii=False)))
     ensure_data_dirs()
     sha = hashlib.sha256(raw).hexdigest()
     stored = build_unique_upload_path(settings.uploads_dir, project.id, "topic", sha, filename)
@@ -259,6 +262,7 @@ def confirm_topic_source(
         )
 
     if payload.source_scope == "PILLAR":
+        db.flush()
         db.query(SourceKeyword).filter_by(project_id=project.id).delete()
         for item in kw_rows:
             if item.get("topic_pillar_code") != tp_code:

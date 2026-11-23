@@ -1,0 +1,11 @@
+{
+  "competitor_names": [],
+  "pillar_rules": [
+    {"contains": ["lừa đảo"], "pillar": "P23", "reason": "Mọi bài lừa đảo thuộc P23"},
+    {"contains": ["thuế", "freelance"], "pillar": "P02", "reason": "Thuế freelance"},
+    {"contains": ["thuế", "hộ kinh doanh"], "pillar": "P03", "reason": "Thuế hộ kinh doanh"},
+    {"contains": ["thuế", "lương"], "pillar": "P01", "reason": "Thuế từ lương"},
+    {"contains": ["nhà", "để ở"], "pillar": "P06", "reason": "Mua/thuê để ở"},
+    {"contains": ["bất động sản", "đầu tư"], "pillar": "P16", "reason": "Bất động sản đầu tư"}
+  ]
+}

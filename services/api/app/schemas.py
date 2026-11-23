@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 
@@ -48,7 +48,7 @@ class ProjectUpdateRequest(BaseModel):
 
 
 class TopicSourceConfirmRequest(BaseModel):
-    source_scope: str = "CONTENT"
+    source_scope: Literal["CONTENT", "PILLAR"] = "CONTENT"
     upload_id: str
     selected_topic_pillar_code: str = ""
     selected_content_code: str = ""

@@ -5,8 +5,8 @@ const apiInternalUrl = process.env.FINZ_API_INTERNAL_URL || 'http://127.0.0.1:80
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   experimental: {
-    // Prevent Next.js dev proxy from timing out at 30s during AI analysis / Gemini fallback tests
-    proxyTimeout: 120_000,
+    // Prevent Next.js dev proxy from timing out during batched brief writing and repairs during AI analysis / Gemini fallback tests
+    proxyTimeout: 600_000,
   },
   async rewrites() {
     return [

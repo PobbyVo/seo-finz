@@ -20,7 +20,7 @@ from app.ai.adapters.gemini_adapter import (
 )
 from app.ai.adapters.mock_adapter import MockAdapter
 from app.ai.adapters.openai_adapter import DEFAULT_OPENAI_MODEL, OpenAIAdapter
-from app.knowledge import playbook, prompt_hash
+from app.knowledge import playbook, prompt_hash, load_thresholds
 from app.ai.errors import AIProviderError, build_error
 from app.models import AIProviderSetting, AIRun, ProjectEvent, SourceKeyword, TopicPillar
 from app.security.secret_store import secret_store
@@ -290,6 +290,7 @@ class AIProviderGateway:
             raise AIProviderError(build_error("AI_NOT_CONFIGURED"))
 
         config = self._build_config(setting, role=role)
+        if role == "BRIEF_WRITER":config.timeout_seconds = 90.0
         if setting.provider != "mock" and not config.api_key:
             raise AIProviderError(build_error("AI_NOT_CONFIGURED"))
 
@@ -297,7 +298,7 @@ class AIProviderGateway:
         context["source_keywords"] = [{key: getattr(row, key) for key in ("keyword", "role", "content_code", "funnel_stage", "title_match_check", "content_title", "subtopic", "planner_volume", "source_ref")} for row in db.query(SourceKeyword).filter_by(project_id=project_id).all()]
         context["pillar_boundaries"] = [{"code": row.code, "notes": row.notes, "main_topic": row.main_topic} for row in db.query(TopicPillar).filter_by(project_id=project_id).all()]
         user_prompt += "\nMetadata nguồn (planner_volume chỉ tham khảo, không phải Semrush):\n" + json.dumps(context, ensure_ascii=False)
-        system_prompt += "\n" + playbook()
+        system_prompt += "\n" + playbook() + "\nNgưỡng đề xuất hiện tại:\n" + json.dumps(load_thresholds(), ensure_ascii=False)
         adapter = self.adapters[setting.provider]
         result = adapter.generate_structured_output(config, system_prompt, user_prompt, context=context)
 
@@ -322,7 +323,7 @@ class AIProviderGateway:
             requested_model=result.requested_model,
             actual_model=result.actual_model,
             prompt_version=prompt_hash(system_prompt),
-            schema_version="1.6.0",
+            schema_version="2.0.0",
             research_cycle=research_cycle,
             latency_ms=result.latency_ms,
             fallback_events_json=json.dumps([e.__dict__ for e in result.fallback_events], ensure_ascii=False),

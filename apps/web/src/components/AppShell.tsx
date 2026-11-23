@@ -74,7 +74,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div>
             <div className="text-sm font-bold tracking-tight text-slate-100">FinZ SEO Workbench</div>
-            <div className="text-[11px] text-slate-400">V1.6 · Evidence-First · Dark</div>
+            <div className="text-[11px] text-slate-400">V2.0 · Evidence-First · Dark</div>
           </div>
         </Link>
         <button

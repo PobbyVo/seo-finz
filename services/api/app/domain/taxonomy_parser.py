@@ -433,7 +433,11 @@ def parse_topic_source_file(file_bytes: bytes, filename: str) -> TopicSourcePrev
         )
 
     # F0 strict cho Bộ key có Giai đoạn/Loại; file V1.6 vẫn đọc được.
-    if best_kw and "funnel_stage" in best_kw[2]:
+    strict_finz = best_kw and ("funnel_stage" in best_kw[2] or any(strip_accents_key(str(cell)) in {"loai", "key"} for cell in sheets_rows[best_kw[0]][best_kw[1]-1]))
+    if strict_finz:
+        for column in ("keyword", "role", "content_code", "funnel_stage"):
+            if column not in best_kw[2]:
+                preview.warnings.append({"code":"F0-THIEU-COT", "severity":"ERROR", "sheet":best_kw[0], "row":best_kw[1], "column":column, "message":f"Thiếu cột bắt buộc: {column}."})
         for item in preview.content_items:
             def error(code: str, column: str, row: int, message: str):
                 preview.warnings.append({"code": code, "severity": "ERROR", "sheet": item["source_sheet"], "row": row, "column": column, "message": message})

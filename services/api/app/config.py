@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="FINZ_", extra="ignore")
 
     app_name: str = "FinZ SEO Workbench API"
-    app_version: str = "1.6.0"
+    app_version: str = "2.0.0"
     host: str = "127.0.0.1"
     port: int = 8000
     data_dir: Path = DEFAULT_DATA_DIR

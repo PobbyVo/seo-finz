@@ -1,5 +1,6 @@
 'use client';
 
+import { ResearchHandoff } from '@/components/ResearchHandoff';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import {
@@ -55,6 +56,7 @@ interface EvidencePayload {
 }
 
 export default function Step05EvidencePage() {
+  const [serpAnalysis, setSerpAnalysis] = useState('');
   const { activeProject, refreshProjects, showCompletionPopup } = useProject();
   const [data, setData] = useState<EvidencePayload | null>(null);
   const [tab, setTab] = useState<'METRICS' | 'ORGANIC_RESULTS'>('METRICS');
@@ -176,6 +178,7 @@ export default function Step05EvidencePage() {
 
   return (
     <div className="space-y-6">
+
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Bước 05 — Kiểm tra dữ liệu & AI Critic sau Semrush</h1>
@@ -213,6 +216,7 @@ export default function Step05EvidencePage() {
         </div>
       </div>
 
+      <button className="finz-v2-primary" onClick={async()=>{try{const result=await apiRequest<{analyses:unknown[]}>(`/api/v1/projects/${activeProject.id}/serp-analysis`,{method:'POST'});setSerpAnalysis(`Đã phân tích ${result.analyses.length} key chính. Xem bảng bàn giao; nhãn AI cần người duyệt.`);}catch(e){setSerpAnalysis(e instanceof Error?e.message:'Không phân tích được SERP.');}}}>AI phân tích SERP theo từng key chính</button><p role="status">{serpAnalysis}</p><ResearchHandoff projectId={activeProject.id} />
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
       {notice && (
         <div className="rounded-xl border border-sky-500/30 bg-sky-950/25 p-3.5 text-xs text-sky-200">{notice}</div>

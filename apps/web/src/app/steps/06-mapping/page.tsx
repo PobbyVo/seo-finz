@@ -1,5 +1,6 @@
 'use client';
 
+import { ResearchHandoff } from '@/components/ResearchHandoff';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { AlertTriangle, ArrowRight, CheckCircle2, ClipboardCheck, Layers, Map, Wrench } from 'lucide-react';
@@ -126,6 +127,7 @@ export default function Step06MappingPage() {
         </div>
       </div>
 
+      <ResearchHandoff projectId={activeProject.id} />
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
 
       {/* SERP Honesty Banner & Soft Quota */}

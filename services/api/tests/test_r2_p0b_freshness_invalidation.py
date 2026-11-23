@@ -144,9 +144,9 @@ def test_f01_f06_f07_serp_change_after_approval_auto_invalidates_without_mapping
     assert exp_new.status_code == 200
     assert "_DRAFT_" in exp_new.headers["X-FinZ-Export-Filename"]
     wb = openpyxl.load_workbook(io.BytesIO(exp_new.content))
-    ws_brief = wb["SEO Content Brief"]
-    modes_by_kw = {ws_brief.cell(r, 8).value: ws_brief.cell(r, 2).value for r in range(2, ws_brief.max_row + 1)}
-    assert modes_by_kw["quyết toán thuế tncn"] == "DRAFT"
+    ws_brief = wb.worksheets[4]
+    # V2 block layout: stale historical brief remains visibly DRAFT in its block.
+    assert any(ws_brief.cell(r,2).value == "Trạng thái" and ws_brief.cell(r,3).value == "DRAFT" for r in range(1,ws_brief.max_row+1))
 
     # F06 + F07: Historical OFFICIAL export is preserved, marked OUTDATED_SUPERSEDED, blocks silent download (409), allows explicit historical ack!
     exports_after = {e["id"]: e for e in tc.get(f"/api/v1/projects/{pid}/exports").json()["exports"]}
@@ -163,7 +163,7 @@ def test_f01_f06_f07_serp_change_after_approval_auto_invalidates_without_mapping
     # F07: Historical BriefVersion, Approval, MappingRevision, and ExportRecord all preserved in SQLite!
     db = db_mod.SessionLocal()
     try:
-        assert db.query(BriefVersion).count() >= 2  # V2: backlog creates no article brief version
+        assert db.query(BriefVersion).count() >= 2  # V2: backlog does not create an additional brief version
         assert db.query(MappingRevision).filter(MappingRevision.keyword_mapping_id == m_a["id"]).count() >= 2
         assert db.query(Approval).filter(Approval.project_id == pid, Approval.target_ref == m_a["id"], Approval.status == "APPROVED").count() == 1
         assert db.query(Approval).filter(Approval.project_id == pid, Approval.target_ref == m_a["id"], Approval.status == "PENDING").count() == 1
