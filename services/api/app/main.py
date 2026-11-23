@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.routers import settings_knowledge
 from app.config import ensure_data_dirs, settings
 from app.db import Base, SessionLocal, engine
 import app.models  # noqa: F401
@@ -56,3 +57,5 @@ app.include_router(demand_map.router, prefix=API_PREFIX)
 app.include_router(research.router, prefix=API_PREFIX)
 app.include_router(mapping.router, prefix=API_PREFIX)
 app.include_router(briefs.router, prefix=API_PREFIX)
+
+app.include_router(settings_knowledge.router, prefix=API_PREFIX)

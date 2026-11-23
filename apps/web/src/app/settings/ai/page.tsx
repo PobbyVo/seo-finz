@@ -13,6 +13,7 @@ import {
   Trash2,
   Zap,
 } from 'lucide-react';
+import { KnowledgeSettings } from '@/components/KnowledgeSettings';
 import { ApiError, apiRequest } from '@/lib/api';
 import { useProject } from '@/context/ProjectContext';
 import type { AIProviderInfo, StandardizedError } from '@/lib/types';
@@ -277,6 +278,7 @@ export default function AISettingsPage() {
 
   return (
     <div className="space-y-6">
+      <KnowledgeSettings />
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-100">Settings → AI Providers</h1>

@@ -20,8 +20,9 @@ from app.ai.adapters.gemini_adapter import (
 )
 from app.ai.adapters.mock_adapter import MockAdapter
 from app.ai.adapters.openai_adapter import DEFAULT_OPENAI_MODEL, OpenAIAdapter
+from app.knowledge import playbook, prompt_hash
 from app.ai.errors import AIProviderError, build_error
-from app.models import AIProviderSetting, AIRun, ProjectEvent
+from app.models import AIProviderSetting, AIRun, ProjectEvent, SourceKeyword, TopicPillar
 from app.security.secret_store import secret_store
 from app.security.ssrf import DEFAULT_PROVIDER_ENDPOINTS, validate_provider_endpoint
 
@@ -292,6 +293,11 @@ class AIProviderGateway:
         if setting.provider != "mock" and not config.api_key:
             raise AIProviderError(build_error("AI_NOT_CONFIGURED"))
 
+        context = dict(context)
+        context["source_keywords"] = [{key: getattr(row, key) for key in ("keyword", "role", "content_code", "funnel_stage", "title_match_check", "content_title", "subtopic", "planner_volume", "source_ref")} for row in db.query(SourceKeyword).filter_by(project_id=project_id).all()]
+        context["pillar_boundaries"] = [{"code": row.code, "notes": row.notes, "main_topic": row.main_topic} for row in db.query(TopicPillar).filter_by(project_id=project_id).all()]
+        user_prompt += "\nMetadata nguồn (planner_volume chỉ tham khảo, không phải Semrush):\n" + json.dumps(context, ensure_ascii=False)
+        system_prompt += "\n" + playbook()
         adapter = self.adapters[setting.provider]
         result = adapter.generate_structured_output(config, system_prompt, user_prompt, context=context)
 
@@ -315,7 +321,7 @@ class AIProviderGateway:
             provider=setting.provider,
             requested_model=result.requested_model,
             actual_model=result.actual_model,
-            prompt_version="v1.6",
+            prompt_version=prompt_hash(system_prompt),
             schema_version="1.6.0",
             research_cycle=research_cycle,
             latency_ms=result.latency_ms,
