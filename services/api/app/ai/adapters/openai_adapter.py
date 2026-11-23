@@ -33,7 +33,7 @@ class OpenAIAdapter(AIProviderAdapter):
         config: ProviderConfig,
         system_prompt: str,
         user_prompt: str,
-        max_tokens: int = 3500,
+        max_tokens: int = 12000,
     ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int]:
         started = time.perf_counter()
         if not config.api_key:

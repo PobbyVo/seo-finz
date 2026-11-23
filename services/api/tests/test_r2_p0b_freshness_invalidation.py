@@ -136,7 +136,8 @@ def test_f01_f06_f07_serp_change_after_approval_auto_invalidates_without_mapping
     assert tc.post(f"/api/v1/projects/{pid}/briefs/generate", json={"allow_draft": False, "mapping_ids": [m_a["id"]]}).status_code == 400
     gen_mixed = tc.post(f"/api/v1/projects/{pid}/briefs/generate", json={"allow_draft": True, "mapping_ids": [m_a["id"]]})
     assert gen_mixed.status_code == 200
-    assert gen_mixed.json()["briefs"][0]["brief_mode"] == "DRAFT"
+    assert gen_mixed.json()["briefs"] == []
+    assert gen_mixed.json()["backlog"][0]["id"] == m_a["id"]
 
     # F06: Fresh export MUST be labeled DRAFT, not OFFICIAL!
     exp_new = tc.post(f"/api/v1/projects/{pid}/exports/download", json={"format": "xlsx"})
@@ -162,7 +163,7 @@ def test_f01_f06_f07_serp_change_after_approval_auto_invalidates_without_mapping
     # F07: Historical BriefVersion, Approval, MappingRevision, and ExportRecord all preserved in SQLite!
     db = db_mod.SessionLocal()
     try:
-        assert db.query(BriefVersion).count() >= 3
+        assert db.query(BriefVersion).count() >= 2  # V2: backlog creates no article brief version
         assert db.query(MappingRevision).filter(MappingRevision.keyword_mapping_id == m_a["id"]).count() >= 2
         assert db.query(Approval).filter(Approval.project_id == pid, Approval.target_ref == m_a["id"], Approval.status == "APPROVED").count() == 1
         assert db.query(Approval).filter(Approval.project_id == pid, Approval.target_ref == m_a["id"], Approval.status == "PENDING").count() == 1

@@ -10,6 +10,8 @@ from app.domain.eligibility_policy import (
     evaluate_mapping_eligibility,
     load_project_policy_context,
 )
+from app.domain.brief_writer import write_brief
+from app.knowledge import load_thresholds
 from app.models import BriefVersion, ContentBrief, KeywordMapping, Project
 
 # Exact 13 Writing Formulas from V1.6 Section 5.8
@@ -176,6 +178,10 @@ def generate_content_briefs(
     project_tag = (project.topic_pillar_code or project.code or "PRJ").upper()
 
     for idx, km in enumerate(mappings, start=1):
+        if km.page_type != "ARTICLE":
+            continue
+        if allow_draft and not km.is_approved and not load_thresholds()["allow_pending_drafts"]:
+            continue
         dec = decisions[km.id]
         is_official = bool(dec["eligible_official"])
         if not is_official and not allow_draft:
@@ -355,6 +361,21 @@ def generate_content_briefs(
         brief.writing_strategy_json = json.dumps(
             {**writing_strategy, "title_variants": title_variants}, ensure_ascii=False
         )
+        payload, writer_errors = write_brief(db, project, km, mappings, secondary_keywords=secondary_kws, serp_evidence=serp_ev)
+        brief.seo_title = payload["title_variants"][0]
+        brief.h1 = payload["h1"]
+        brief.meta_description = payload["meta_description"]
+        brief.article_goal = payload["article_goal"]
+        brief.target_audience = payload["target_audience"]
+        brief.cta = payload["cta"]
+        brief.outline_json = json.dumps(payload["outline"], ensure_ascii=False)
+        brief.internal_links_json = json.dumps(payload["internal_links"], ensure_ascii=False)
+        brief.seo_checklist_json = json.dumps(payload["checklist"] + payload["legal_sources"], ensure_ascii=False)
+        writing_strategy.update({"title_variants":payload["title_variants"], "faq":payload["faq"], "legal_sources":payload["legal_sources"], "word_count_reference":payload["word_count_reference"], "serp_references":payload["serp_references"], "generation_source":"AI" if not writer_errors else "FALLBACK", "quality_errors":writer_errors})
+        brief.writing_strategy_json = json.dumps(writing_strategy, ensure_ascii=False)
+        if writer_errors:
+            brief.brief_mode = "DRAFT"
+            brief.status = "NEEDS_HUMAN_EDIT"
         db.flush()
 
         db.add(
@@ -369,6 +390,7 @@ def generate_content_briefs(
     db.commit()
     return {
         "policy_version": POLICY_VERSION,
+        "backlog": [{"id": m.id, "primary_keyword": m.primary_keyword, "page_type": m.page_type} for m in mappings if m.page_type != "ARTICLE"],
         "briefs": [serialize_brief(b) for b in created_or_updated],
         "official_count": len([b for b in created_or_updated if b.brief_mode == "OFFICIAL"]),
         "draft_count": len([b for b in created_or_updated if b.brief_mode != "OFFICIAL"]),

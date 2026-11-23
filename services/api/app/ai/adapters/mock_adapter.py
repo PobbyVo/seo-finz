@@ -13,7 +13,7 @@ from app.ai.adapters.base import (
 
 def _guess_page_type(keyword: str) -> str:
     low = keyword.lower()
-    if any(k in low for k in ("công cụ", "tính ", "calculator", "tool", "máy tính", "quy đổi")):
+    if any(k in low for k in ("công cụ", "calculator", "tool", "máy tính", "quy đổi")):
         return "TOOL"
     if any(k in low for k in ("mẫu ", "file excel", "template", "tải ", "download", "biểu mẫu", "pdf")):
         return "DOWNLOAD"
@@ -59,7 +59,12 @@ class MockAdapter(AIProviderAdapter):
         task = ctx.get("task", "ANALYST")
         model = config.model_id or "finz-mock-deterministic-v1"
 
-        if task == "ANALYST":
+        if task == "BRIEF_WRITER":
+            from app.domain.brief_writer import mock_brief
+            data = mock_brief(ctx)
+        elif task == "SERP_ANALYST":
+            data = {"rows": [{"evidence_id": row["id"], "page_type": _guess_page_type((row.get("url") or "") + " " + (row.get("title") or "")), "rationale": "Giả thuyết offline từ URL/title; chưa đọc trang.", "source_refs": [row["id"]]} for row in ctx.get("evidence_rows", [])], "intent": "Chưa xác minh", "mandatory_ideas": [], "gaps": [], "length_reference": "Không đọc được trong Mock", "legal_sources_needed": []}
+        elif task == "ANALYST":
             data = self._mock_analyst(ctx)
         elif task == "CRITIC_PRE":
             data = self._mock_critic_pre(ctx)

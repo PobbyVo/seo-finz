@@ -461,7 +461,7 @@ class GeminiAdapter(AIProviderAdapter):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             discover_first=False,
-            max_output_tokens=4096,
+            max_output_tokens=12000,
             is_health_ping=False,
         )
         return StructuredGenerationResult(
