@@ -1,4 +1,4 @@
-# Hướng dẫn sử dụng FinZ SEO Workbench V1.6
+# Hướng dẫn sử dụng FinZ SEO Workbench V2.0
 
 Tài liệu dành cho người trực tiếp nghiên cứu SEO và bàn giao Content Brief. Bạn sẽ đi từ một chủ đề và bộ từ khóa đầu vào đến Keyword Mapping đã được xem xét, rồi xuất tài liệu cho người viết bài.
 
@@ -328,7 +328,7 @@ Mở **07. Content Brief & Xuất** — [mở màn hình](http://127.0.0.1:3000/
 
    | Định dạng | Cách sử dụng |
    | --- | --- |
-   | **Xuất XLSX (3 bảng)** | Dùng trong Excel hoặc tự tải lên Google Sheets. Có đúng 3 sheet: `Keyword Overview`, `Keyword Mapping`, `SEO Content Brief`. |
+   | **Xuất XLSX (5 bảng)** | Dùng trong Excel hoặc tự tải lên Google Sheets. Có 5 sheet theo chủ đề: `Keyword Research`, `SERP Check`, `Keyword Mapping`, `Nhat ky`, `SEO Content Brief`. |
    | **CSV** | Dùng khi cần xử lý dữ liệu dạng bảng. |
    | **JSON** | Dùng khi cần dữ liệu có cấu trúc cho công cụ khác. |
    | **Bản in HTML** | Mở file bằng trình duyệt để đọc hoặc in; có thể dùng chức năng In → Lưu dưới dạng PDF của trình duyệt. |
@@ -402,3 +402,27 @@ Khi cần kiểm tra sâu hơn, mở **Nhật ký hệ thống → Làm mới**.
 - [ ] Đã tạo brief cho các mapping mong muốn và kiểm tra nhãn dự thảo/chính thức.
 - [ ] Đã xuất file, mở kiểm tra và bàn giao đúng bản hiện hành.
 - [ ] Đã sao lưu dữ liệu trước khi kết thúc buổi làm việc.
+
+## Nâng cấp V2.0 — nghiên cứu theo chủ đề
+
+1. Bước 01: tải Bộ key, xem lỗi F0 theo dòng/cột. Mỗi mã có đúng một key Chính; giai đoạn TOFU/MOFU/BOFU. Khi xác nhận, chọn **Nghiên cứu toàn bộ mã nội dung trong pillar** để giữ toàn bộ Bộ key. Tắt lựa chọn để dùng chế độ một mã như trước.
+2. Settings → AI Providers → **Playbook & ngưỡng nghiệp vụ**: xem/sửa các ngưỡng đề xuất. Keychain/env tiếp tục là nơi duy nhất lưu API key. Danh sách thương hiệu và quy tắc chuyển pillar được quản lý trong `services/api/app/knowledge/routing.yaml`.
+3. Bước 03: **Tạo phiếu Semrush từ Bộ key đã xác nhận**. F2 giữ riêng biến thể không dấu mơ hồ; key ở hai mã phải sửa/duyệt nguồn trước. Phiếu VN gồm Overview theo lô tối đa 100 key và Related, Questions, SERP cho từng key chính. Xuất file trên Semrush rồi tải lên Bước 04.
+4. File SERP không cần cột Keyword/Title: gắn bằng phiếu, hoặc tên `SERP-<key chính>.csv` khớp duy nhất với Bộ key. AI Overview được giữ riêng; Page AS và Ref.Domains còn trong dữ liệu gốc và bảng SERP Check.
+5. Bước 05: **AI phân tích SERP theo từng key chính**. Mặc định không đọc website ngoài. Bật tùy chọn trong Settings nếu cần; trang không tải được phải ghi rõ. Ý bắt buộc chỉ lấy khi có đủ bài đã đọc làm bằng chứng theo ngưỡng; không suy đoán độ dài khi chưa đủ bài.
+6. Bước 06: xem **Bàn giao nghiên cứu theo chủ đề**: góc bài, giai đoạn, keyword phụ có số, câu hỏi chưa xác minh, phân bố SERP và lý do ưu tiên. Có thể sửa nhãn từng dòng SERP; chạy lại phân tích và mapping để đưa thay đổi vào phiên bản cần duyệt. Nút **Sửa · chạy lại F5/F6** chỉ xử lý dòng đã chọn và lưu ghi chú. Các phê duyệt cũ chỉ giữ hiệu lực khi fingerprint và bằng chứng không đổi.
+7. Bước 07: AI viết brief từ bàn giao. Thiếu phân tích SERP hiện hành hoặc chưa duyệt chỉ được nháp khi cấu hình cho phép và người dùng yêu cầu. Công cụ/tệp/dữ liệu nằm ở Backlog. F7 kiểm Title, Meta, vị trí key phụ, URL nội bộ, nguồn pháp lý và trùng outline; quá số lần sửa thì hiển thị `NEEDS_HUMAN_EDIT` (Cần người sửa), `generation_source=FALLBACK` (Bản dự phòng).
+8. Xuất XLSX 5 sheet. Sheet brief có bảng điều hành, tổng quan và liên kết đến từng khối brief, phần Backlog cuối sheet. `/logs` lọc theo mã lý do và cờ Cần duyệt.
+
+### Chờ sếp chốt
+
+Ngưỡng P1/P2, số trang đọc, tuổi dữ liệu, số vòng bổ sung và sửa brief đều là đề xuất và có thể sửa trong Settings. Quyết định giữ P0 và cho phép brief nháp chưa duyệt nằm trong cấu hình; chưa tự tạo ưu tiên P0 khi chưa có quy tắc nghiệp vụ được chốt. Tỷ lệ thuế/bảo hiểm và văn bản hiện hành cần biên tập viên xác minh trước khi xuất bản bài viết.
+
+
+### Mở rộng tới 5–7 bài có bằng chứng
+
+Bước 03 có panel **Mở rộng nghiên cứu hướng tới 5–7 bài**. Bấm **Lọc Volume và tạo đề xuất Semrush** để bật chính sách cho dự án: keyword thiếu Volume hoặc Volume 0 không vào mapping/brief; dữ liệu nguồn vẫn được giữ và xuất trong phần loại khỏi kế hoạch. File nhập qua UI mặc định bật bộ lọc này. Volume thấp nhưng dương không bị tự loại chỉ vì thấp.
+
+Sao chép danh sách đề xuất mới vào Semrush Keyword Overview bulk (VN). Tải kết quả về Bước 04; keyword có Volume dương chuyển sang chờ duyệt chủ đề. Sau khi bạn duyệt và chọn đưa vào nghiên cứu, chạy lại mapping, kiểm tra SERP/intent và duyệt mapping hiện hành. Related/Questions giúp tìm biến thể; SERP cho từng key dự kiến giúp quyết định tách/gộp. Keyword mới chưa có số không được tính là bài; các biến thể gross/net không tự thành nhiều URL.
+
+Output brief có bảng điều hành, tổng quan B6:J, liên kết đến từng khối, nhãn cột B/nội dung cột C và heading cột B/hướng dẫn cột E. Công cụ, tệp và dữ liệu nằm ở Backlog. Tổng số bài và tổng Volume chỉ tính ARTICLE; không sao chép số liệu mẫu.

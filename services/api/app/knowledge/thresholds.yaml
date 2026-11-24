@@ -1,0 +1,19 @@
+{
+  "status": "Đề xuất — chờ sếp chốt",
+  "p1_min_volume": 500,
+  "p1_max_kd": 30,
+  "p2_min_volume": 100,
+  "backlog_min_top10": 5,
+  "article_min_top10": 6,
+  "explanation_min_top10": 4,
+  "mandatory_idea_min_pages": 3,
+  "merge_min_shared_urls": 3,
+  "max_supplement_rounds": 2,
+  "stale_days": 90,
+  "read_pages_min": 3,
+  "read_pages_max": 5,
+  "brief_repair_attempts": 2,
+  "allow_pending_drafts": true,
+  "allow_p0": false,
+  "fetch_serp_pages": false
+}

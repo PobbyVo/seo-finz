@@ -140,8 +140,9 @@ def test_t22_t23_t24_t25_t26_mapping_approvals_brief_and_xlsx_export(client):
     assert "Luong" not in fname and "luong" not in fname
 
     wb = openpyxl.load_workbook(io.BytesIO(exp.content))
-    assert wb.sheetnames == ["Keyword Overview", "Keyword Mapping", "SEO Content Brief"]
-    assert wb["SEO Content Brief"].max_row >= 2
+    assert len(wb.sheetnames) == 1
+    assert [name.split(" - ")[0] for name in wb.sheetnames] == ["SEO Content Brief"]
+    assert wb.worksheets[0].max_row >= 2
 
     # CSV, JSON, HTML printable exports also work cleanly
     for fmt in ("csv", "json", "html"):

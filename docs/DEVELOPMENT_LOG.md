@@ -54,3 +54,23 @@
   - Headless Chrome E2E (`scripts/qa-browser-t27-t29.mjs`): PASS across all 5 suites & 9 core screens.
   - Real GitHub Actions CI (`ubuntu-latest`) Run `#44911120993` on `6fa1dc1930ef0521577025803fe37235a6f1fde0`: **completed / success** (both Backend and Web+Chrome E2E jobs).
   - Detailed QA report: `docs/qa-runs/FINZ-16-QA-R2-20261121-1332/`.
+
+## 2026-11-23 — Nâng cấp V2.0 theo Bộ key FinZ
+
+- Tách 5 nhánh nối tiếp cho đầu vào, playbook, nghiên cứu, viết brief và xuất file/nghiệm thu.
+- Thêm migration `0004_v2_source_metadata`, giữ dữ liệu legacy và cơ chế backup trước migration; không hỗ trợ downgrade phá dữ liệu.
+- Đọc header Bộ key/NFC/F0, giữ metadata và phạm vi nhiều mã trong pillar. Playbook/thresholds đọc runtime; Settings ghi rõ ngưỡng đề xuất; AIRun lưu hash prompt thay phiên bản cứng.
+- Phiếu Semrush VN, F2/F3 trước xuất, F1 thiếu số/key mới chờ duyệt; Critic nhận dữ liệu từng dòng. Ưu tiên dùng cả Volume/KD. Phân tích SERP, nhãn do người sửa và bài đọc nằm trên bằng chứng gốc, không sửa manifest/snapshot.
+- BRIEF_WRITER và SERP_ANALYST chạy được với Mock; brief có schema, few-shot, F7 và số vòng sửa có giới hạn. JSON hỏng retry một lần; lỗi còn lại giữ nháp và nhãn cần người sửa. Bỏ mẫu Title chứa mã pillar và outline chung khỏi đường sinh nội dung.
+- Xuất XLSX 5 sheet theo chủ đề, các khối brief/link đúng dòng, Backlog riêng; giữ lịch sử export và kiểm freshness. Chạy lại dòng mapping giữ ID/phê duyệt nếu không đổi fingerprint.
+- Nghiệm thu cuối: 55 test + TypeScript đạt; build web đạt; 7 ảnh UI Chrome không lỗi JavaScript. P01 với file Semrush mẫu có Volume 140/KD20 → P2, không bịa số cho key thiếu dữ liệu.
+- Báo cáo, ảnh và XLSX nháp: `docs/qa-runs/FINZ-V2-20261123/README.md`. Chưa kiểm provider bằng key thật hay xác minh pháp luật live; các ngưỡng và chính sách P0 tiếp tục chờ chốt.
+
+## 2026-11-24 — Layout mẫu và mở rộng keyword có Volume
+
+- Đối chiếu hai sheet tham chiếu; tạo bản Google Sheets riêng theo mẫu trong thư mục ChatGPT sau khi được người dùng chấp thuận. Không sửa hai nguồn.
+- Thêm chính sách dự án loại missing/zero Semrush Volume khỏi plan/brief, giữ dữ liệu nguồn và giữ policy khi re-import; UI mới mặc định bật.
+- Thêm panel bước 03, danh sách/phiếu 8 keyword P01 chờ Semrush; không gán Volume/KD cho giả thuyết và không đếm thành bài. Chỉ đưa vào mapping sau số liệu và phê duyệt/promotion, vẫn giữ gate cho bản chính thức.
+- Xuất theo bố cục bảng điều hành/tổng quan/khối brief, thêm audit exclusions và đề xuất trong Keyword Research. Tách AI Overview khỏi organic và hiển thị nhãn page type theo lớp phân tích/correction.
+- Nghiệm thu: 61 test + TypeScript, build web đạt; UI có đủ 8 keyword, không pageerror. Google Sheet kiểm được values/formulas/style qua connector; render trong Chrome cô lập cần đăng nhập.
+- Kết quả: docs/qa-runs/FINZ-KEYWORD-EXPANSION-20261124/README.md.

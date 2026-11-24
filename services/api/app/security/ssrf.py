@@ -56,3 +56,15 @@ def validate_provider_endpoint(provider: str, endpoint_url: str | None) -> str:
         )
 
     return cleaned
+
+
+def resolve_public_web_url(url: str) -> tuple[str, str, str]:
+    """Resolve once; caller pins this IP for TLS connection (including redirects)."""
+    import socket
+    parsed=urlparse(url)
+    if parsed.scheme != 'https' or not parsed.hostname or parsed.username or parsed.password or parsed.port not in (None,443):
+        raise ValueError('Chỉ cho phép URL HTTPS công khai ở cổng 443.')
+    addresses={item[4][0] for item in socket.getaddrinfo(parsed.hostname,443,type=socket.SOCK_STREAM)}
+    if not addresses or any(not ipaddress.ip_address(ip).is_global for ip in addresses):
+        raise ValueError('SSRF: chặn địa chỉ mạng nội bộ hoặc không công khai.')
+    return parsed.hostname, sorted(addresses)[0], (parsed.path or '/') + ('?'+parsed.query if parsed.query else '')

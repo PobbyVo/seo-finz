@@ -21,7 +21,7 @@ from app.domain.eligibility_policy import (
     load_project_policy_context,
 )
 from app.domain.mapping_engine import slugify_vi
-from app.models import ContentBrief, EvidenceRow, ExportRecord, KeywordMapping, Project
+from app.models import ContentBrief, EvidenceRow, ExportRecord, KeywordMapping, Project, ProjectEvent
 
 
 def _safe_project_prefix(project: Project) -> str:
@@ -151,8 +151,10 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
     mapping_rows: list[dict[str, Any]] = []
     for m in mappings:
         dec = decisions_by_id[m.id]
+        from app.domain.research_business import mapping_handoff
         mapping_rows.append(
             {
+                "handoff": mapping_handoff(db, project, m),
                 "id": m.id,
                 "revision": m.revision,
                 "content_fingerprint": dec["live_fingerprint"][:12],
@@ -177,7 +179,19 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
             }
         )
 
+    from app.domain.keyword_expansion import enabled, source_review
+    from app.models import KeywordCandidate
+    volume_policy=enabled(project)
+    page_labels={}
+    for event in db.query(ProjectEvent).filter_by(project_id=project.id).order_by(ProjectEvent.created_at.asc()).all():
+        details=json.loads(event.details_json or "{}")
+        for label in details.get("serp_analysis",{}).get("analysis",{}).get("rows",[]):
+            if label.get("evidence_id") and label.get("page_type"):page_labels[label["evidence_id"]]=label["page_type"]
+        if event.event_type=="SERP_LABEL_CORRECTED" and details.get("evidence_id"):page_labels[details["evidence_id"]]=details["page_type"]
+    expansion_candidates=db.query(KeywordCandidate).filter_by(project_id=project.id,candidate_type="RESEARCH_EXPANSION").all()
     return {
+        "excluded_source_keywords": [r for r in source_review(db,project) if not r['included']] if volume_policy else [],
+        "expansion_candidates": [{"keyword":c.keyword,"reason":c.rationale,"status":c.status} for c in expansion_candidates],
         "policy_version": POLICY_VERSION,
         "contains_api_keys": False,
         "evidence_state_hash": live_state["evidence_state_hash"],
@@ -204,16 +218,19 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
                 "market": r.market,
                 "batch_id": r.batch_id,
             }
-            for r in evidence_rows
+            for r in evidence_rows if not volume_policy or (r.volume is not None and r.volume > 0)
         ],
+        "serp_check": [{"keyword":r.keyword,"position":r.organic_position,"url":r.organic_url,"title":r.organic_title,"page_type":page_labels.get(r.id,r.organic_page_type),"result_type":r.serp_result_type,"valid":r.organic_valid,"duplicate":r.is_duplicate,"raw":json.loads(r.raw_row_json or "{}")} for r in db.query(EvidenceRow).filter_by(project_id=project.id,row_type="ORGANIC_RESULTS").all()],
+        "events": [{"code":r.event_type,"message":r.message,"details":json.loads(r.details_json or "{}")} for r in db.query(ProjectEvent).filter_by(project_id=project.id).all()],
         "keyword_mapping": mapping_rows,
-        "content_briefs": live_state["live_briefs"],
+        "content_briefs": [b for b in live_state["live_briefs"] if b["content_type"] == "ARTICLE" and (not volume_policy or any(m.id==b["keyword_mapping_id"] and (m.volume or 0)>0 for m in mappings))],
+        "backlog": [m for m in mapping_rows if m["page_type"] != "ARTICLE"],
     }
 
 
 def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[bytes, str, str, ExportRecord]:
     """
-    Export SEO deliverables in XLSX (3 logical sheets), CSV, JSON, or printable HTML.
+    Export SEO deliverables in XLSX (SEO Content Brief only), CSV, JSON, or printable HTML.
     Dynamically recalculates live eligibility & staleness BEFORE constructing filename/content
     and NEVER includes API keys or secret refs.
     """
@@ -241,7 +258,7 @@ def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[byte
         filename = f"{prefix}_SEO_Brief_{mode}_{ts}.csv"
         media_type = "text/csv; charset=utf-8"
     elif fmt_clean == "json":
-        content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        content = json.dumps({key: data[key] for key in ("project", "policy_version", "contains_api_keys", "content_briefs")}, ensure_ascii=False, indent=2).encode("utf-8")
         filename = f"{prefix}_SEO_Brief_{mode}_{ts}.json"
         media_type = "application/json; charset=utf-8"
     else:
@@ -282,140 +299,115 @@ def _style_header(ws, headers: list[str]) -> None:
 
 
 def _build_xlsx(data: dict[str, Any]) -> bytes:
-    """Build workbook with exact 3 logical tables: Keyword Overview, Keyword Mapping, SEO Content Brief."""
+    """Chỉ xuất SEO Content Brief; liên kết tính từ dòng thực tế."""
+    topic = (
+        slugify_vi(data["project"].get("topic_pillar_name") or data["project"]["name"])
+        .replace("-", " ")
+        .title()
+        .replace(" ", "")[:11]
+        or "ChuDe"
+    )
     wb = openpyxl.Workbook()
-
-    ws1 = wb.active
-    ws1.title = "Keyword Overview"
-    _style_header(ws1, ["Keyword", "Volume", "KD", "Intent", "CPC", "SERP Features", "Market", "Batch ID"])
-    for r in data["keyword_overview"]:
-        ws1.append([r["keyword"], r["volume"], r["kd"], r["intent"], r["cpc"], r["serp_features"], r["market"], r["batch_id"]])
-
-    ws2 = wb.create_sheet(title="Keyword Mapping")
-    _style_header(
-        ws2,
-        [
-            "Revision",
-            "Fingerprint",
-            "Primary Keyword",
-            "Secondary Keywords",
-            "Page Type",
-            "Proposed URL",
-            "Volume",
-            "KD",
-            "Intent",
-            "Metrics Source",
-            "Priority",
-            "Business Value",
-            "Effort",
-            "SERP Tier",
-            "Top 10 Verified",
-            "Content Status",
-            "Approval State",
-            "Eligible Official",
-            "Merge/Split Proposal",
-        ],
-    )
-    for m in data["keyword_mapping"]:
-        ws2.append(
-            [
-                m["revision"],
-                m["content_fingerprint"],
-                m["primary_keyword"],
-                ", ".join(m["secondary_keywords"]),
-                m["page_type"],
-                m["proposed_url"],
-                m["volume"],
-                m["kd"],
-                m["intent"],
-                m["metrics_source"],
-                m["priority"],
-                m["business_value"],
-                m["effort"],
-                m["serp_status"],
-                "YES" if m["top10_verified"] else "NO",
-                m["content_status"],
-                m["approval_state"],
-                "YES" if m["eligible_official"] else "NO",
-                m["merge_split_proposal"],
-            ]
-        )
-
-    ws3 = wb.create_sheet(title="SEO Content Brief")
-    _style_header(
-        ws3,
-        [
-            "BR ID",
-            "Mode",
-            "Stale",
-            "Mapping Rev",
-            "Content Type",
-            "Priority",
-            "Status",
-            "Primary Keyword",
-            "Secondary Keywords",
-            "Metrics & Source",
-            "Proposed URL",
-            "Target Audience",
-            "Search Intent",
-            "Article Goal",
-            "SEO Title",
-            "H1",
-            "Meta Description",
-            "CTA",
-            "Internal Links",
-            "Outline H2/H3",
-            "SEO Checklist",
-            "Writing Strategy (Whole Article)",
-        ],
-    )
-    for b in data["content_briefs"]:
-        ws = b["writing_strategy"]
-        ws_summary = (
-            f"Chính: {ws.get('primary_formula', '')} | Bổ trợ: {', '.join(ws.get('supporting_formulas', []))} | "
-            f"Lý do: {ws.get('rationale', '')} | "
-            f"Chiến thuật (toàn bài): {'; '.join(t.get('text', '') for t in ws.get('engagement_tactics', []))}"
-        )
-        outline_txt = "\n".join(
-            f"- {h['level']}: {h['heading']}"
-            + (
-                "\n" + "\n".join(f"    - {c['level']}: {c['heading']}" for c in h.get("children", []))
-                if h.get("children")
-                else ""
+    wb.remove(wb.active)
+    sheet = wb.create_sheet(f"SEO Content Brief - {topic}")
+    briefs = [b for b in data["content_briefs"] if b["content_type"] == "ARTICLE"]
+    sheet.sheet_view.showGridLines=False
+    sheet.append([None, f"SEO CONTENT BRIEF — BẢNG ĐIỀU HÀNH CHỦ ĐỀ {topic.upper()}"])
+    sheet.merge_cells("B1:J1")
+    sheet.append([None,"TỔNG QUAN QUẢN LÝ"]);sheet.merge_cells("B2:J2")
+    sheet.append([None,"TỔNG SỐ BÀI VIẾT",None,"ƯU TIÊN P1",None,"TỔNG SEARCH VOLUME",None,"TIẾN ĐỘ"])
+    sheet.append([None,len(briefs),None,sum(b["priority"]=="P1" for b in briefs),None,sum(b["metrics"].get("volume") or 0 for b in briefs),None,f"{sum(b['brief_mode']=='OFFICIAL' for b in briefs)}/{len(briefs)} chính thức"])
+    sheet.append([])
+    sheet.append([None,"Mã bài","Tên bài / Hạng mục","Loại nội dung","Ưu tiên","Trạng thái","Keyword chính","Volume/tháng","URL dự kiến","Chi tiết Brief"])
+    overview=[]
+    for b in briefs:
+        sheet.append([None,b["br_code"],b["seo_title"],"Bài viết",b["priority"],b["status"],b["primary_keyword"],b["metrics"].get("volume"),b["proposed_url"]])
+        overview.append(sheet.max_row)
+    for idx, b in enumerate(briefs):
+        sheet.append([])
+        sheet.append([None,f"BRIEF {idx+1:02d}: {b['br_code']} — {b['primary_keyword']}"])
+        sheet.merge_cells(start_row=sheet.max_row,start_column=2,end_row=sheet.max_row,end_column=9)
+        start = sheet.max_row
+        cell = sheet.cell(overview[idx], 10, "Xem Brief")
+        cell.hyperlink = f"#'{sheet.title}'!B{start}"
+        cell.style = "Hyperlink"
+        cell = sheet.cell(start, 10, "Lên Overview")
+        cell.hyperlink = f"#'{sheet.title}'!B6"
+        cell.style = "Hyperlink"
+        for label, key in [
+            ("Trạng thái", "brief_mode"),
+            ("Ưu tiên", "priority"),
+            ("Keyword chính", "primary_keyword"),
+            ("Độc giả", "target_audience"),
+            ("Mục tiêu bài", "article_goal"),
+            ("SEO Title", "seo_title"),
+            ("H1", "h1"),
+            ("Meta", "meta_description"),
+            ("CTA", "cta"),
+            ("URL dự kiến", "proposed_url"),
+        ]:
+            sheet.append([None, label, b[key]])
+        strategy = b.get("writing_strategy", {})
+        for label, value in [
+            ("Volume / KD", f"{b['metrics'].get('volume') if b['metrics'].get('volume') is not None else 'Chưa có số'} / KD {b['metrics'].get('kd') if b['metrics'].get('kd') is not None else 'Chưa có số'}"),
+            ("Keyword phụ", "; ".join(b.get("secondary_keywords",[]))),
+            ("Độ dài tham khảo", strategy.get("word_count_reference", "Chưa xác minh")),
+            ("Nguồn pháp lý cần kiểm", "; ".join(strategy.get("legal_sources", []))),
+            (
+                "Internal link",
+                json.dumps(b.get("internal_links", []), ensure_ascii=False),
+            ),
+            ("Câu hỏi", "; ".join(strategy.get("faq", []))),
+            ("Checklist", "; ".join(b.get("seo_checklist", []))),
+        ]:
+            sheet.append([None, label, value])
+        sheet.append([None,"CẤU TRÚC OUTLINE H2",None,None,"HƯỚNG DẪN VIẾT & YÊU CẦU NỘI DUNG"])
+        for heading in b.get("outline", []):
+            sheet.append(
+                [None, heading["heading"], None, None, heading.get("notes", "")]
             )
-            for h in b.get("outline", [])
-        )
-        ws3.append(
-            [
-                b["br_code"],
-                b["brief_mode"],
-                "STALE" if b["is_stale"] else "CURRENT",
-                b.get("mapping_revision") or "",
-                b["content_type"],
-                b["priority"],
-                b["status"],
-                b["primary_keyword"],
-                ", ".join(b["secondary_keywords"]),
-                json.dumps(b["metrics"], ensure_ascii=False),
-                b["proposed_url"],
-                b["target_audience"],
-                f"[{b['search_intent_status']}] {b['search_intent_summary']}",
-                b["article_goal"],
-                b["seo_title"],
-                b["h1"],
-                b["meta_description"],
-                b["cta"],
-                "; ".join(f"{l['anchor']} -> {l['target_url']}" for l in b.get("internal_links", [])),
-                outline_txt,
-                "\n".join(b.get("seo_checklist", [])),
-                ws_summary,
-            ]
-        )
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    return buf.getvalue()
-
+            for child in heading.get("children", []):
+                sheet.append(
+                    [None, "  " + child["heading"], None, None, child.get("notes", "")]
+                )
+    for ws in wb:
+        ws.freeze_panes = "B5" if ws == sheet else "A2"
+        for row in ws:
+            for cell in row:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+                # Source text must not become an Excel formula.
+                if isinstance(cell.value, str) and cell.value.startswith(
+                    ("=", "+", "-", "@")
+                ):
+                    cell.value = "'" + cell.value
+        for col in ("B", "C", "E"):
+            ws.column_dimensions[col].width = 45
+    sheet.freeze_panes="G7"
+    sheet.column_dimensions['A'].width=3
+    for col,width in {'B':22,'C':45,'D':20,'E':20,'F':26,'G':35,'H':16,'I':34,'J':20}.items():sheet.column_dimensions[col].width=width
+    for row in sheet:
+        for cell in row:
+            cell.font=Font(name='Arial',size=10,color='18202C')
+            cell.fill=PatternFill('solid',fgColor='F8F8FB')
+        sheet.row_dimensions[row[0].row].height=42
+        if row[1].value:
+            if str(row[1].value).startswith(('BRIEF ', 'TỔNG QUAN','CẤU TRÚC','BACKLOG')) or row[0].row==6:
+                for cell in row[1:]:cell.fill=PatternFill('solid',fgColor='073763');cell.font=Font(name='Arial',size=11,bold=True,color='FFFFFF')
+            elif row[0].row>6 and row[2].value and not row[4].value:
+                row[1].fill=PatternFill('solid',fgColor='EEF3F9');row[1].font=Font(name='Arial',size=10,bold=True,color='1C3860')
+    for row in range(7,sheet.max_row+1):
+        if sheet.cell(row,2).value and sheet.cell(row,3).value is not None and sheet.cell(row,4).value is None and sheet.cell(row,5).value is None:
+            sheet.merge_cells(start_row=row,start_column=3,end_row=row,end_column=10)
+            sheet.row_dimensions[row].height=56
+        if sheet.cell(row,2).value and sheet.cell(row,5).value and sheet.cell(row,3).value is None:
+            sheet.merge_cells(start_row=row,start_column=2,end_row=row,end_column=4)
+            sheet.merge_cells(start_row=row,start_column=5,end_row=row,end_column=10)
+            sheet.row_dimensions[row].height=64
+    sheet['B1'].font=Font(name='Arial',size=14,bold=True,color='073763')
+    sheet.row_dimensions[1].height=48
+    out = io.BytesIO()
+    wb.save(out)
+    return out.getvalue()
 
 def _build_csv(data: dict[str, Any]) -> bytes:
     buf = io.StringIO()

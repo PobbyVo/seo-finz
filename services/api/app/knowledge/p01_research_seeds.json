@@ -1,0 +1,10 @@
+[
+ {"keyword":"lương thử việc","angle":"Quyền lợi, mức thỏa thuận và cách đọc điều khoản lương thử việc","reason":"Nhu cầu ở giai đoạn nhận việc, khác bài định nghĩa gross/net"},
+ {"keyword":"lương tháng 13","angle":"Điều kiện hưởng, cách hiểu thỏa thuận và tình huống nghỉ việc","reason":"Khoản thu nhập theo năm, khác lương thực nhận hàng tháng"},
+ {"keyword":"cách tính lương tăng ca","angle":"Phân biệt thời gian làm thêm và các giả định cần kiểm trong ví dụ","reason":"Nhu cầu kiểm tra khoản làm thêm, cần nguồn pháp lý"},
+ {"keyword":"cách tính lương ngày nghỉ lễ","angle":"Kiểm tra khoản lương trong ngày nghỉ và khi làm việc ngày lễ","reason":"Tình huống ngày nghỉ/lễ khác ngày làm việc thông thường; kiểm trùng với bài tăng ca bằng SERP"},
+ {"keyword":"cách tính thuế thu nhập cá nhân từ tiền lương","angle":"Đọc các khoản khấu trừ và thông tin cần chuẩn bị, không ghi tỷ lệ chưa xác minh","reason":"Bài sâu về thuế từ lương; kiểm giao intent với gross/net trước khi tách"},
+ {"keyword":"cách đề xuất tăng lương","angle":"Chuẩn bị bằng chứng đóng góp và trao đổi trong công việc hiện tại","reason":"Tăng lương nội bộ; kiểm giao SERP với bài deal lương khi tuyển dụng"},
+ {"keyword":"phụ cấp lương đóng bảo hiểm xã hội","angle":"Phân loại các khoản trên phiếu lương và văn bản cần tra","reason":"Nhu cầu xác định cơ sở đóng bảo hiểm, khác giải thích gross/net"},
+ {"keyword":"công ty chậm trả lương phải làm sao","angle":"Các bước ghi nhận, trao đổi và tra cứu quyền lợi người lao động","reason":"Tình huống xử lý chậm trả lương, khác thương lượng mức lương"}
+]

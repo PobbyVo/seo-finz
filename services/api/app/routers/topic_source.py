@@ -49,6 +49,9 @@ async def preview_topic_source(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
+    for warning in preview.warnings:
+        if warning.get("severity") == "ERROR":
+            db.add(ProjectEvent(project_id=project.id,level="WARNING",event_type=warning["code"],message=warning["message"],details_json=json.dumps({**warning,"needs_review":True},ensure_ascii=False)))
     ensure_data_dirs()
     sha = hashlib.sha256(raw).hexdigest()
     stored = build_unique_upload_path(settings.uploads_dir, project.id, "topic", sha, filename)
@@ -73,6 +76,7 @@ async def preview_topic_source(
                 "keywords_header_row": preview.keywords_header_row,
                 "topic_pillars": preview.topic_pillars,
                 "content_items": preview.content_items,
+                "validation_errors": [w for w in preview.warnings if w.get("severity") == "ERROR"],
             },
             ensure_ascii=False,
         ),
@@ -121,6 +125,9 @@ def confirm_topic_source(
     tp_rows = meta.get("topic_pillars") or []
     kw_rows = meta.get("content_items") or []
 
+    if meta.get("validation_errors"):
+        raise HTTPException(status_code=422, detail={"message": "F0 chưa đạt; sửa dữ liệu nguồn trước khi lưu.", "errors": meta["validation_errors"]})
+
     # Persist taxonomy tables cleanly for this project
     db.query(TaxonomyPillar).filter(TaxonomyPillar.project_id == project.id).delete()
     db.query(TopicPillar).filter(TopicPillar.project_id == project.id).delete()
@@ -151,6 +158,8 @@ def confirm_topic_source(
                 topic_type=t.get("topic_type", ""),
                 split_axis=t.get("split_axis", ""),
                 main_topic=t.get("main_topic", ""),
+                notes=t.get("notes", ""),
+                legacy_code=t.get("legacy_code", ""),
                 source_file=upload.filename,
                 source_sheet=t.get("source_sheet", ""),
                 source_row=t.get("source_row"),
@@ -193,8 +202,10 @@ def confirm_topic_source(
     project.language = payload.language.strip() or "vi"
     project.soft_article_min = payload.soft_article_min
     project.soft_article_max = max(payload.soft_article_min, payload.soft_article_max)
+    previous_policy = json.loads(project.provenance_json or "{}").get("exclude_keywords_without_volume",False)
     project.provenance_json = json.dumps(
         {
+            "exclude_keywords_without_volume": payload.exclude_keywords_without_volume if payload.exclude_keywords_without_volume is not None else previous_policy,
             "source_file": upload.filename,
             "upload_id": upload.id,
             "sha256": upload.sha256,
@@ -214,6 +225,11 @@ def confirm_topic_source(
     c_code = project.content_code or f"{tp_code}-01"
     ref = f"CONTENT:{c_code}" if project.content_code else f"TOPIC:{tp_code}"
 
+    source_meta = {normalize_text(r["keyword"]): {**r, "content_title": item.get("content_title", "")} for item in kw_rows for r in item.get("keyword_rows", [])}
+    def keyword_metadata(keyword):
+        record = source_meta.get(normalize_text(keyword), {})
+        return {key: record.get(key, "") for key in ("funnel_stage", "title_match_check", "content_title", "subtopic", "planner_volume")}
+
     if pk:
         db.add(
             SourceKeyword(
@@ -221,6 +237,7 @@ def confirm_topic_source(
                 topic_pillar_code=tp_code,
                 content_code=c_code,
                 keyword=pk,
+                **keyword_metadata(pk),
                 keyword_normalized=normalize_text(pk),
                 role="PRIMARY",
                 is_original=True,
@@ -236,6 +253,7 @@ def confirm_topic_source(
                 topic_pillar_code=tp_code,
                 content_code=c_code,
                 keyword=sk,
+                **keyword_metadata(sk),
                 keyword_normalized=normalize_text(sk),
                 role="SECONDARY",
                 is_original=True,
@@ -244,6 +262,18 @@ def confirm_topic_source(
                 source_sheet=meta.get("keywords_sheet", ""),
             )
         )
+
+    if payload.source_scope == "PILLAR":
+        db.flush()
+        db.query(SourceKeyword).filter_by(project_id=project.id).delete()
+        for item in kw_rows:
+            if item.get("topic_pillar_code") != tp_code:
+                continue
+            records = item.get("keyword_rows") or [{"keyword": item["primary_keyword"], "role": "PRIMARY"}] + [{"keyword": k, "role": "SECONDARY"} for k in item.get("secondary_keywords", [])]
+            for record in records:
+                db.add(SourceKeyword(project_id=project.id, topic_pillar_code=tp_code, content_code=item["content_code"], keyword=record["keyword"], keyword_normalized=normalize_text(record["keyword"]), role=record["role"], source_ref=f"CONTENT:{item['content_code']}", source_file=upload.filename, source_sheet=item.get("source_sheet", ""), source_row=record.get("source_row"), **keyword_metadata(record["keyword"])))
+        project.content_code = ""
+        project.content_title = ""
 
     db.add(
         ProjectSnapshot(

@@ -145,9 +145,13 @@ def build_effective_chain(
                 add(m)
 
     for m in DEFAULT_GEMINI_FALLBACK_CHAIN:
-        add(m)
+        if not discovered or m in discovered:
+            add(m)
 
-    return chain[:MAX_CHAIN_LENGTH]
+    # Giữ đường lui tới model ổn định, kể cả cache có nhiều preview.
+    stable = [m for m in ("gemini-2.5-flash", "gemini-2.5-flash-lite") if m in chain]
+    head = [m for m in chain if m not in stable]
+    return head[:MAX_CHAIN_LENGTH-len(stable)] + stable
 
 
 class GeminiAdapter(AIProviderAdapter):
@@ -292,7 +296,7 @@ class GeminiAdapter(AIProviderAdapter):
         close_after = self._http_client is None
         per_call_timeout = 8.0 if is_health_ping else max(25.0, float(config.timeout_seconds or 45.0))
         # Guard against indefinite hangs during multi-model ping (disabled for injected mock clients)
-        total_budget_s = 45.0 if (is_health_ping and self._http_client is None) else 110.0
+        total_budget_s = 45.0 if (is_health_ping and self._http_client is None) else 480.0
         client = self._http_client if self._http_client is not None else httpx.Client(timeout=per_call_timeout)
 
         try:
@@ -332,6 +336,12 @@ class GeminiAdapter(AIProviderAdapter):
                         )
                         return False, current_model, {}, discovered, fallback_events, failure_counts, timeout_err, elapsed_ms
 
+                    if failure_counts.get(current_model, 0) >= threshold and idx + 1 < len(chain):
+                        next_model = chain[idx + 1]
+                        fallback_events.append(ModelFallbackEvent(from_model=current_model,to_model=next_model,failures_on_model=failure_counts[current_model],error_code="PREVIOUS_FAILURES",reason=f"{current_model} đã lỗi đủ {threshold} lần; chuyển sang {next_model}."))
+                        idx += 1
+                        break
+
                     raw_text, call_err = self._call_single_model(
                         client=client,
                         api_key=config.api_key,
@@ -339,7 +349,7 @@ class GeminiAdapter(AIProviderAdapter):
                         model_id=current_model,
                         system_prompt=system_prompt,
                         user_prompt=user_prompt,
-                        timeout=per_call_timeout,
+                        timeout=min(per_call_timeout, max(1.0, total_budget_s - (time.perf_counter() - started))),
                         max_output_tokens=max_output_tokens,
                         require_json_mime=not is_health_ping,
                     )
@@ -382,7 +392,7 @@ class GeminiAdapter(AIProviderAdapter):
                                     error_code=call_err.code,
                                     reason=(
                                         f"Model {current_model} lỗi {failure_counts[current_model]}/{threshold} lần "
-                                        f"({call_err.code}) → tự động hạ xuống {next_model}."
+                                        f"({call_err.code}: {call_err.reason}) → tự động hạ xuống {next_model}."
                                     ),
                                 )
                             )
@@ -461,7 +471,7 @@ class GeminiAdapter(AIProviderAdapter):
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             discover_first=False,
-            max_output_tokens=4096,
+            max_output_tokens=12000,
             is_health_ping=False,
         )
         return StructuredGenerationResult(

@@ -348,6 +348,11 @@ export interface ContentBriefItem {
     opening_ideas: string[];
     engagement_tactics: Array<{ number: number; code: string; text: string }>;
     title_variants?: string[];
+    faq?: string[];
+    legal_sources?: string[];
+    word_count_reference?: string;
+    generation_source?: string;
+    quality_errors?: string[];
   };
   version: number;
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import { KeywordExpansion } from '@/components/KeywordExpansion';
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Copy, Check, PlusCircle, UploadCloud, Eye, Shield } from 'lucide-react';
@@ -10,7 +11,7 @@ import { ErrorBanner } from '@/components/ErrorBanner';
 import { StatusBadge } from '@/components/StatusBadge';
 
 export default function Step03SemrushPage() {
-  const { activeProject, refreshProjects } = useProject();
+  const { activeProject, refreshProjects, showCompletionPopup } = useProject();
   const [requests, setRequests] = useState<ResearchRequestItem[]>([]);
   const [notice, setNotice] = useState('');
   const [copiedId, setCopiedId] = useState<string | null>(null);
@@ -99,6 +100,7 @@ export default function Step03SemrushPage() {
 
   return (
     <div className="space-y-6">
+      <button className="finz-v2-primary" onClick={async()=>{try { await apiRequest(`/api/v1/projects/${activeProject.id}/research-tickets`,{method:'POST'}); await loadRequests(); await refreshProjects(activeProject.id); showCompletionPopup({title:"Đã tạo phiếu Semrush",message:"Chọn đúng phiếu và tải file tương ứng ở bước tiếp theo.",nextStepHref:"/steps/04-upload",nextStepLabel:"Bước 04 — Tải file",navigationEligible:true}); setNotice('Đã tạo phiếu VN: Overview theo lô ≤100, Related, Questions và SERP cho từng key chính.'); } catch(e){setNotice(e instanceof Error?e.message:'Không tạo được phiếu.');}}}>Tạo phiếu Semrush từ Bộ key đã xác nhận</button>
       <div>
         <h1 className="text-2xl font-bold text-slate-100">Bước 03 — Yêu cầu nghiên cứu Semrush</h1>
         <p className="mt-1 text-sm text-slate-400">
@@ -112,6 +114,7 @@ export default function Step03SemrushPage() {
       </div>
 
       <ErrorBanner error={error} onDismiss={() => setError(null)} />
+      <KeywordExpansion projectId={activeProject.id} />
 
       {/* Create Additional Request */}
       <form onSubmit={handleCreateManual} className="rounded-2xl border border-slate-800 bg-surface-900 p-5 space-y-4">

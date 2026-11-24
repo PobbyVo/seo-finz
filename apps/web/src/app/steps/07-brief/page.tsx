@@ -238,9 +238,7 @@ export default function Step07BriefPage() {
       {/* Export Bar */}
       <section className="rounded-2xl border border-slate-800 bg-surface-900 p-4 flex flex-wrap items-center justify-between gap-3">
         <div className="text-xs text-slate-300">
-          <strong className="text-slate-100">Xuất tệp cục bộ:</strong> XLSX chứa đúng 3 sheet (<code className="text-sky-300">Keyword Overview</code>,{' '}
-          <code className="text-sky-300">Keyword Mapping</code>, <code className="text-sky-300">SEO Content Brief</code>) đặt tên theo dự án{' '}
-          <strong className="text-white">{activeProject.code}</strong> kèm nhãn xác minh trung thực.
+          <strong className="text-slate-100">Xuất tệp cục bộ:</strong> Chỉ xuất <strong className="text-white">SEO Content Brief</strong>, kèm trạng thái xác minh của từng bài.
         </div>
         <div className="flex flex-wrap gap-2">
           <button
@@ -250,7 +248,7 @@ export default function Step07BriefPage() {
             className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500/20 border border-emerald-500/40 px-3 py-1.5 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/30"
           >
             <FileSpreadsheet className="h-3.5 w-3.5" />
-            {exporting === 'xlsx' ? 'Đang xuất…' : 'Xuất XLSX (3 bảng)'}
+            {exporting === 'xlsx' ? 'Đang xuất…' : 'Xuất SEO Content Brief (XLSX)'}
           </button>
           <button
             type="button"
@@ -407,6 +405,12 @@ export default function Step07BriefPage() {
                 </div>
               </div>
 
+              <div className="rounded-xl border border-slate-700 p-4 text-xs space-y-2">
+                <p><strong>Độ dài tham khảo:</strong> {b.writing_strategy.word_count_reference || 'Chưa xác minh'}</p>
+                <p><strong>Nguồn pháp lý cần kiểm:</strong> {(b.writing_strategy.legal_sources || []).join('; ') || 'Xem checklist riêng chủ đề'}</p>
+                <p><strong>FAQ:</strong> {(b.writing_strategy.faq || []).join('; ') || 'Chưa có'}</p>
+                {b.writing_strategy.generation_source === 'FALLBACK' && <p role="alert" className="text-amber-200">Bản dự phòng — cần người sửa: {(b.writing_strategy.quality_errors || []).join('; ')}</p>}
+              </div>
               {/* Writing Strategy (Whole Article Level) */}
               <div className="rounded-xl border border-violet-500/30 bg-violet-950/15 p-4 text-xs space-y-2.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">

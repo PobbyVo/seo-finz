@@ -62,6 +62,17 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const stepsByNum = new Map(
     (activeProject?.workflow?.steps || []).map((s) => [s.step_number, s.status])
   );
+  const counts = activeProject?.workflow?.counts;
+  const unlocked = [true,
+    Boolean(activeProject?.primary_keyword_original),
+    Boolean(counts?.demand_groups),
+    Boolean(counts?.demand_groups && counts?.research_requests),
+    Boolean(counts?.demand_groups && counts?.research_requests && counts?.research_batches),
+    Boolean(counts?.demand_groups && counts?.research_batches && ['PROCESS_COMPLETED','QUALITY_APPROVED','REVIEW_REQUIRED','WARNING'].includes(stepsByNum.get(5) || '')),
+    Boolean(counts?.demand_groups && counts?.keyword_mappings && ['PROCESS_COMPLETED','QUALITY_APPROVED','REVIEW_REQUIRED','WARNING'].includes(stepsByNum.get(5) || ''))];
+  const currentStep = STEP_NAV.findIndex(step => step.href === pathname);
+  const blocked = currentStep > 0 && !unlocked[currentStep];
+  const nextRequired = STEP_NAV.find((step,index) => index < Math.max(currentStep,1) && !unlocked[index+1]) || STEP_NAV[0];
   const pendingApprovals = activeProject?.workflow?.counts?.pending_approvals || 0;
 
   const sidebarContent = (
@@ -74,7 +85,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div>
             <div className="text-sm font-bold tracking-tight text-slate-100">FinZ SEO Workbench</div>
-            <div className="text-[11px] text-slate-400">V1.6 · Evidence-First · Dark</div>
+            <div className="text-[11px] text-slate-400">V2.0 · Evidence-First · Dark</div>
           </div>
         </Link>
         <button
@@ -171,7 +182,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Link
                 key={item.href}
                 href={item.href}
-                onClick={() => setMobileOpen(false)}
+                onClick={(event) => { if (!unlocked[item.num-1]) event.preventDefault(); else setMobileOpen(false); }}
+                aria-disabled={!unlocked[item.num-1]}
+                title={!unlocked[item.num-1] ? "Hoàn thành bước trước để tiếp tục" : undefined}
                 aria-current={active ? 'page' : undefined}
                 className={`flex items-center justify-between gap-2 rounded-lg px-2.5 py-2 text-[13px] font-medium transition ${
                   active
@@ -334,7 +347,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         <main className="flex-1 px-4 py-6 lg:px-8 max-w-7xl w-full mx-auto">
-          {children}
+          {blocked ? <section className="rounded-xl border border-amber-500/40 bg-amber-950/20 p-6"><h1 className="text-xl font-bold">Chưa thể mở bước này</h1><p className="mt-2 text-slate-300">Hoàn thành dữ liệu và thao tác ở các bước trước. Lỗi AI hoặc bước chưa thực hiện không được xem là đã hoàn tất.</p><Link className="mt-4 inline-block text-sky-300 underline" href={nextRequired.href}>Tiếp tục tại {nextRequired.label}</Link></section> : children}
         </main>
       </div>
 

@@ -19,6 +19,8 @@ from app.models import (
     Approval,
     ArticleOpportunity,
     KeywordMapping,
+    KeywordCandidate,
+    SourceKeyword,
     Project,
     ProjectEvent,
 )
@@ -128,7 +130,10 @@ def generate_mapping_preview(project_id: str, db: Session = Depends(get_db)):
     if not project:
         raise HTTPException(status_code=404, detail="Không tìm thấy dự án.")
 
+    from app.domain.research_business import assess_keyword_data, propose_serp_merges
+    assess_keyword_data(db, project)
     result = build_keyword_mapping_preview(db, project, create_approvals=True)
+    propose_serp_merges(db, project)
     db.add(
         ProjectEvent(
             project_id=project.id,
@@ -319,6 +324,28 @@ def decide_approval(
             ctx = load_project_policy_context(db, project)
             dec = evaluate_mapping_eligibility(project, target_km, ctx)
             target_km.content_status = dec["recommended_content_status"]
+        elif approval.scope == "RESEARCH_ONLY":
+            candidate=db.get(KeywordCandidate,approval.target_ref)
+            if candidate and candidate.project_id==project.id and candidate.candidate_type=="RESEARCH_EXPANSION":
+                from app.domain.keyword_expansion import volume_for
+                if (volume_for(db,project,candidate.keyword) or 0)<=0:raise HTTPException(422,'Chủ đề mới cần Volume dương đã xác minh trước khi duyệt.')
+                candidate.status="APPROVED"
+                candidate.source_ref_valid=True
+            if candidate and candidate.project_id==project.id and candidate.candidate_type=="SECONDARY_PROPOSAL":
+                refs=json.loads(candidate.source_refs_json or "[]")
+                content=next((ref.removeprefix("CONTENT:") for ref in refs if ref.startswith("CONTENT:")),None)
+                parent=db.query(SourceKeyword).filter_by(project_id=project.id,content_code=content,role="PRIMARY").first() if content else None
+                if parent:
+                    existing=db.query(SourceKeyword).filter_by(project_id=project.id,content_code=content,keyword_normalized=candidate.keyword_normalized).first()
+                    if not existing:
+                        db.add(SourceKeyword(project_id=project.id,topic_pillar_code=parent.topic_pillar_code,content_code=content,keyword=candidate.keyword,keyword_normalized=candidate.keyword_normalized,role="SECONDARY",is_original=False,source_ref=f"CONTENT:{content}",funnel_stage=parent.funnel_stage,content_title=parent.content_title))
+                        if project.content_code:
+                            secondary=json.loads(project.secondary_keywords_json or "[]")
+                            if candidate.keyword not in secondary:project.secondary_keywords_json=json.dumps([*secondary,candidate.keyword],ensure_ascii=False)
+                    candidate.status="APPROVED"
+                    candidate.source_ref_valid=True
+                else:
+                    candidate.status="APPROVED_REQUIRES_ASSOCIATION"
     elif target_km is not None:
         # REJECTED or NEED_MORE_EVIDENCE MUST keep mapping unapproved & blocked!
         target_km.is_approved = False
@@ -356,4 +383,67 @@ def decide_approval(
         "target_fingerprint": approval.target_fingerprint,
         "decided_at": now.isoformat(),
         "workflow": refresh_workflow_state(db, project),
+    }
+
+@router.get("/research-handoff")
+def research_handoff(project_id: str, db: Session = Depends(get_db)):
+    from app.domain.research_business import mapping_handoff
+
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "Không tìm thấy dự án.")
+    rows = (
+        db.query(KeywordMapping)
+        .filter_by(project_id=project_id, is_archived=False)
+        .order_by(KeywordMapping.created_at.asc())
+        .all()
+    )
+    return {
+        "rows": [
+            {
+                "article_code": f"BR{index:02d}",
+                "keyword": m.primary_keyword,
+                "page_type": m.page_type,
+                "priority": m.priority,
+                "url": m.proposed_url,
+                **mapping_handoff(db, project, m),
+            }
+            for index, m in enumerate(rows, 1)
+        ]
+    }
+
+
+@router.post("/mapping/{mapping_id}/reprocess")
+def reprocess_mapping_row(
+    project_id: str, mapping_id: str, payload: dict, db: Session = Depends(get_db)
+):
+    from app.routers.research import analyze_serp_business
+
+    row = db.get(KeywordMapping, mapping_id)
+    project = db.get(Project, project_id)
+    if not project or not row or row.project_id != project_id or row.is_archived:
+        raise HTTPException(404, "Không tìm thấy dòng mapping.")
+    db.add(
+        ProjectEvent(
+            project_id=project_id,
+            event_type="MAPPING_REVISION_REQUESTED",
+            message=f"Yêu cầu sửa riêng dòng {row.primary_keyword}.",
+            details_json=json.dumps(
+                {
+                    "mapping_id": row.id,
+                    "note": str(payload.get("note", ""))[:4000],
+                    "needs_review": True,
+                },
+                ensure_ascii=False,
+            ),
+        )
+    )
+    analyze_serp_business(project_id, keyword=row.primary_keyword, db=db)
+    result = build_keyword_mapping_preview(db, project, target_mapping_id=row.id)
+    db.commit()
+    return {
+        "saved": True,
+        "mapping_id": row.id,
+        "message": "Đã chạy lại F5/F6 riêng dòng; mọi thay đổi nội dung cần duyệt phiên bản hiện hành.",
+        **result,
     }

@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.routers import settings_knowledge
 from app.config import ensure_data_dirs, settings
 from app.db import Base, SessionLocal, engine
 import app.models  # noqa: F401
@@ -27,7 +28,7 @@ async def lifespan(_app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="FinZ SEO Workbench V1.6 — Human-in-the-loop Evidence-Based SEO Decision System",
+    description="FinZ SEO Workbench V2.0 — Human-in-the-loop Evidence-Based SEO Decision System",
     lifespan=lifespan,
 )
 
@@ -56,3 +57,8 @@ app.include_router(demand_map.router, prefix=API_PREFIX)
 app.include_router(research.router, prefix=API_PREFIX)
 app.include_router(mapping.router, prefix=API_PREFIX)
 app.include_router(briefs.router, prefix=API_PREFIX)
+
+app.include_router(settings_knowledge.router, prefix=API_PREFIX)
+
+from app.routers import keyword_expansion
+app.include_router(keyword_expansion.router, prefix=API_PREFIX)

@@ -1,4 +1,4 @@
-# FinZ SEO Workbench V1.6 — Hướng Dẫn Tải, Cài Đặt & Chạy Local
+# FinZ SEO Workbench V2.0 — Hướng Dẫn Tải, Cài Đặt & Chạy Local
 
 Ứng dụng web local (**Dark Mode**, vận hành 1 người dùng trên máy tính, lưu dữ liệu vào SQLite) hỗ trợ chuyên viên SEO thực hiện quy trình nghiên cứu có kiểm chứng **7 bước**:
 `Nhập Topic Pillar/Keywords` → `AI phân tích & phản biện` → `Yêu cầu Semrush thủ công` → `Upload CSV/XLSX & ghép cột` → `Quality Gates & AI Critic` → `Keyword Mapping & Phê duyệt` → `SEO Content Brief & Xuất XLSX/CSV/JSON/HTML`.
@@ -99,7 +99,7 @@ npm run setup
 5. **Bước 04 — Tải file & ghép cột:** Chọn đúng phiếu yêu cầu, chọn định dạng số (`vi-VN` cho `9.900` hoặc `en-US` cho `9,900`), kiểm tra preview & cột ghép (hỗ trợ cả báo cáo metrics và `ORGANIC_RESULTS`) → bấm **Xác nhận import**.
 6. **Bước 05 — Kiểm tra dữ liệu & AI Critic:** Xem Quality Gates (`F0–F7`, `E0–E2`), chạy **AI Critic sau Semrush** (tối đa 2 lượt/chu kỳ, có thể duyệt tạo yêu cầu bổ sung hoặc mở chu kỳ mới).
 7. **Bước 06 — Kế hoạch bài viết & Keyword Mapping:** Lập mapping dựa trên bằng chứng (tách riêng bài `ARTICLE` với `TOOL`/`DOWNLOAD`/`SERVICE`; gắn `SERP_NOT_VERIFIED` nếu chưa có `ORGANIC_RESULTS`) → vào **Chờ phê duyệt (`/approvals`)** để duyệt các quyết định quan trọng.
-8. **Bước 07 — SEO Content Brief & Xuất:** Tạo bản Brief **CHÍNH THỨC** (khi đã duyệt + đạt đủ gate) hoặc bản **DỰ THẢO** (`SERP_NOT_VERIFIED`) gồm đầy đủ 13 công thức viết & 16 chiến thuật cấp toàn bài → xuất **XLSX (3 sheet)**, **CSV**, **JSON** hoặc **Bản in HTML**.
+8. **Bước 07 — SEO Content Brief & Xuất:** Tạo bản Brief **CHÍNH THỨC** (khi đã duyệt + đạt đủ gate) hoặc bản **DỰ THẢO** (`SERP_NOT_VERIFIED`) gồm đầy đủ 13 công thức viết & 16 chiến thuật cấp toàn bài → xuất **XLSX (5 sheet)**, **CSV**, **JSON** hoặc **Bản in HTML**.
 
 ---
 
@@ -144,3 +144,10 @@ Finz/
 ├── docs/DEVELOPMENT_LOG.md # Nhật ký phát triển
 └── data/                   # (Tự sinh khi chạy, không push lên Git) SQLite DB, uploads, backups, exports
 ```
+
+
+## V2.0 — Bộ key, nghiên cứu và AI viết brief
+
+Nâng cấp bổ sung header Bộ key FinZ, F0 có vị trí lỗi, dự án theo toàn bộ pillar, playbook tài chính cá nhân đọc ở runtime, ngưỡng đề xuất sửa trong Settings, phiếu Semrush VN, phân tích SERP và vai BRIEF_WRITER. Bằng chứng, phê duyệt theo fingerprint, dữ liệu cũ và lịch sử export vẫn được bảo vệ.
+
+Xem [hướng dẫn V2.0](docs/HUONG_DAN_SU_DUNG.md) và [báo cáo kiểm tra](docs/qa-runs/FINZ-V2-20261123/README.md). XLSX hiện xuất 5 sheet theo chủ đề, có các khối brief và Backlog riêng.

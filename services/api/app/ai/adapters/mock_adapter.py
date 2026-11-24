@@ -11,17 +11,7 @@ from app.ai.adapters.base import (
 )
 
 
-def _guess_page_type(keyword: str) -> str:
-    low = keyword.lower()
-    if any(k in low for k in ("công cụ", "tính ", "calculator", "tool", "máy tính", "quy đổi")):
-        return "TOOL"
-    if any(k in low for k in ("mẫu ", "file excel", "template", "tải ", "download", "biểu mẫu", "pdf")):
-        return "DOWNLOAD"
-    if any(k in low for k in ("dịch vụ", "tư vấn", "thuê ngoài", "service")):
-        return "SERVICE"
-    if any(k in low for k in ("phần mềm", "khóa học", "sản phẩm", "gói ", "bảng giá")):
-        return "PRODUCT"
-    return "ARTICLE"
+from app.domain.research_business import infer_query_asset as _guess_page_type
 
 
 class MockAdapter(AIProviderAdapter):
@@ -59,7 +49,13 @@ class MockAdapter(AIProviderAdapter):
         task = ctx.get("task", "ANALYST")
         model = config.model_id or "finz-mock-deterministic-v1"
 
-        if task == "ANALYST":
+        if task == "BRIEF_WRITER":
+            from app.domain.brief_writer import mock_brief
+            data = mock_brief(ctx)
+        elif task == "SERP_ANALYST":
+            from app.domain.semrush_parser import infer_page_type_from_url
+            data = {"rows": [{"evidence_id": row["id"], "page_type": infer_page_type_from_url(row.get("url"),row.get("title")), "rationale": "Giả thuyết offline từ URL/title; chưa đọc trang.", "source_refs": [row["id"]]} for row in ctx.get("evidence_rows", [])], "intent": "Chưa xác minh", "mandatory_ideas": [], "gaps": [], "length_reference": "Không đọc được trong Mock", "legal_sources_needed": []}
+        elif task == "ANALYST":
             data = self._mock_analyst(ctx)
         elif task == "CRITIC_PRE":
             data = self._mock_critic_pre(ctx)
@@ -79,6 +75,11 @@ class MockAdapter(AIProviderAdapter):
         )
 
     def _mock_analyst(self, ctx: dict[str, Any]) -> dict[str, Any]:
+        sources = ctx.get("source_keywords", [])
+        primaries = [r for r in sources if r.get("role") == "PRIMARY"]
+        if len(primaries) > 1:
+            results = [self._mock_analyst({**ctx, "source_keywords":[], "primary_keyword":row["keyword"], "content_code":row["content_code"], "content_title":row.get("content_title",""), "secondary_keywords":[r["keyword"] for r in sources if r.get("content_code")==row["content_code"] and r.get("role")!="PRIMARY"]}) for row in primaries]
+            return {"summary":f"Phân tích offline {len(primaries)} mã nội dung trong chủ đề; các giả thuyết cần Semrush và người duyệt.", **{key:[item for result in results for item in result.get(key,[])] for key in ("demand_groups","proposed_candidates","recommended_requests")}}
         topic_name = ctx.get("topic_pillar_name") or ctx.get("main_topic") or ctx.get("project_name") or "Chủ đề nghiên cứu"
         topic_code = ctx.get("topic_pillar_code") or ctx.get("project_code") or "TOPIC"
         primary_kw = ctx.get("primary_keyword") or topic_name.lower()
