@@ -1423,6 +1423,7 @@ def compute_effective_brief_freshness(
     brief: ContentBrief,
     mapping: KeywordMapping | None,
     mapping_decision: dict[str, Any] | None,
+    allowed_mapping_urls: set[str] | None = None,
 ) -> dict[str, Any]:
     """Dynamically determine a brief's live staleness and truthful effective mode."""
     stale_reasons: list[str] = []
@@ -1459,6 +1460,7 @@ def evaluate_brief_quality(
     brief: ContentBrief,
     mapping: KeywordMapping | None,
     mapping_decision: dict[str, Any] | None,
+    allowed_mapping_urls: set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Phase 2: Post-Generation Brief Quality (F7).
@@ -1492,7 +1494,7 @@ def evaluate_brief_quality(
     from app.domain.brief_writer import business_quality
     if ws.get("generation_source"):
         payload = {"primary_formula":ws.get("primary_formula"),"tactic_codes":[t["code"] for t in ws.get("engagement_tactics",[])],"title_variants":ws.get("title_variants",[brief.seo_title]), "meta_description":brief.meta_description, "outline":outline, "faq":ws.get("faq",[]), "internal_links":json.loads(brief.internal_links_json or "[]"), "legal_sources":ws.get("legal_sources",[]), "content_type":brief.content_type}
-        issues.extend(business_quality(payload, primary_keyword=brief.primary_keyword, secondary_keywords=json.loads(brief.secondary_keywords_json or "[]"), allowed_urls={link["target_url"] for link in payload["internal_links"]}))
+        issues.extend(business_quality(payload, primary_keyword=brief.primary_keyword, secondary_keywords=json.loads(brief.secondary_keywords_json or "[]"), allowed_urls=allowed_mapping_urls or set()))
         issues.extend(ws.get("quality_errors", []))
     fresh = compute_effective_brief_freshness(brief, mapping, mapping_decision)
     if fresh["effective_is_stale"]:

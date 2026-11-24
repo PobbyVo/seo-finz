@@ -382,6 +382,7 @@ def evaluate_all_gates(db: Session, project: Project) -> dict[str, Any]:
             b,
             mappings_by_id.get(b.keyword_mapping_id) if b.keyword_mapping_id else None,
             mapping_eligibilities.get(b.keyword_mapping_id) if b.keyword_mapping_id else None,
+            allowed_mapping_urls={m.proposed_url for m in active_mappings},
         )
         for b in briefs
     ]

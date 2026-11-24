@@ -59,3 +59,6 @@ app.include_router(mapping.router, prefix=API_PREFIX)
 app.include_router(briefs.router, prefix=API_PREFIX)
 
 app.include_router(settings_knowledge.router, prefix=API_PREFIX)
+
+from app.routers import keyword_expansion
+app.include_router(keyword_expansion.router, prefix=API_PREFIX)

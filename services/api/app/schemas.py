@@ -49,6 +49,7 @@ class ProjectUpdateRequest(BaseModel):
 
 class TopicSourceConfirmRequest(BaseModel):
     source_scope: Literal["CONTENT", "PILLAR"] = "CONTENT"
+    exclude_keywords_without_volume: bool | None = None
     upload_id: str
     selected_topic_pillar_code: str = ""
     selected_content_code: str = ""

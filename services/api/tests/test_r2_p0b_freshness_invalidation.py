@@ -144,7 +144,7 @@ def test_f01_f06_f07_serp_change_after_approval_auto_invalidates_without_mapping
     assert exp_new.status_code == 200
     assert "_DRAFT_" in exp_new.headers["X-FinZ-Export-Filename"]
     wb = openpyxl.load_workbook(io.BytesIO(exp_new.content))
-    ws_brief = wb.worksheets[4]
+    ws_brief = wb.worksheets[0]
     # V2 block layout: stale historical brief remains visibly DRAFT in its block.
     assert any(ws_brief.cell(r,2).value == "Trạng thái" and ws_brief.cell(r,3).value == "DRAFT" for r in range(1,ws_brief.max_row+1))
 

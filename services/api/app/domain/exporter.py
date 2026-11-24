@@ -179,7 +179,19 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
             }
         )
 
+    from app.domain.keyword_expansion import enabled, source_review
+    from app.models import KeywordCandidate
+    volume_policy=enabled(project)
+    page_labels={}
+    for event in db.query(ProjectEvent).filter_by(project_id=project.id).order_by(ProjectEvent.created_at.asc()).all():
+        details=json.loads(event.details_json or "{}")
+        for label in details.get("serp_analysis",{}).get("analysis",{}).get("rows",[]):
+            if label.get("evidence_id") and label.get("page_type"):page_labels[label["evidence_id"]]=label["page_type"]
+        if event.event_type=="SERP_LABEL_CORRECTED" and details.get("evidence_id"):page_labels[details["evidence_id"]]=details["page_type"]
+    expansion_candidates=db.query(KeywordCandidate).filter_by(project_id=project.id,candidate_type="RESEARCH_EXPANSION").all()
     return {
+        "excluded_source_keywords": [r for r in source_review(db,project) if not r['included']] if volume_policy else [],
+        "expansion_candidates": [{"keyword":c.keyword,"reason":c.rationale,"status":c.status} for c in expansion_candidates],
         "policy_version": POLICY_VERSION,
         "contains_api_keys": False,
         "evidence_state_hash": live_state["evidence_state_hash"],
@@ -206,19 +218,19 @@ def _collect_export_datasets(db: Session, project: Project) -> dict[str, Any]:
                 "market": r.market,
                 "batch_id": r.batch_id,
             }
-            for r in evidence_rows
+            for r in evidence_rows if not volume_policy or (r.volume is not None and r.volume > 0)
         ],
-        "serp_check": [{"keyword":r.keyword,"position":r.organic_position,"url":r.organic_url,"title":r.organic_title,"page_type":r.organic_page_type,"raw":json.loads(r.raw_row_json or "{}")} for r in db.query(EvidenceRow).filter_by(project_id=project.id,row_type="ORGANIC_RESULTS").all()],
+        "serp_check": [{"keyword":r.keyword,"position":r.organic_position,"url":r.organic_url,"title":r.organic_title,"page_type":page_labels.get(r.id,r.organic_page_type),"result_type":r.serp_result_type,"valid":r.organic_valid,"duplicate":r.is_duplicate,"raw":json.loads(r.raw_row_json or "{}")} for r in db.query(EvidenceRow).filter_by(project_id=project.id,row_type="ORGANIC_RESULTS").all()],
         "events": [{"code":r.event_type,"message":r.message,"details":json.loads(r.details_json or "{}")} for r in db.query(ProjectEvent).filter_by(project_id=project.id).all()],
         "keyword_mapping": mapping_rows,
-        "content_briefs": [b for b in live_state["live_briefs"] if b["content_type"] == "ARTICLE"],
+        "content_briefs": [b for b in live_state["live_briefs"] if b["content_type"] == "ARTICLE" and (not volume_policy or any(m.id==b["keyword_mapping_id"] and (m.volume or 0)>0 for m in mappings))],
         "backlog": [m for m in mapping_rows if m["page_type"] != "ARTICLE"],
     }
 
 
 def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[bytes, str, str, ExportRecord]:
     """
-    Export SEO deliverables in XLSX (5 logical sheets), CSV, JSON, or printable HTML.
+    Export SEO deliverables in XLSX (SEO Content Brief only), CSV, JSON, or printable HTML.
     Dynamically recalculates live eligibility & staleness BEFORE constructing filename/content
     and NEVER includes API keys or secret refs.
     """
@@ -246,7 +258,7 @@ def export_project_bundle(db: Session, project: Project, fmt: str) -> tuple[byte
         filename = f"{prefix}_SEO_Brief_{mode}_{ts}.csv"
         media_type = "text/csv; charset=utf-8"
     elif fmt_clean == "json":
-        content = json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8")
+        content = json.dumps({key: data[key] for key in ("project", "policy_version", "contains_api_keys", "content_briefs")}, ensure_ascii=False, indent=2).encode("utf-8")
         filename = f"{prefix}_SEO_Brief_{mode}_{ts}.json"
         media_type = "application/json; charset=utf-8"
     else:
@@ -287,7 +299,7 @@ def _style_header(ws, headers: list[str]) -> None:
 
 
 def _build_xlsx(data: dict[str, Any]) -> bytes:
-    """Năm bảng theo chủ đề; liên kết brief tính từ dòng thực tế."""
+    """Chỉ xuất SEO Content Brief; liên kết tính từ dòng thực tế."""
     topic = (
         slugify_vi(data["project"].get("topic_pillar_name") or data["project"]["name"])
         .replace("-", " ")
@@ -297,203 +309,30 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
     )
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
-    research = wb.create_sheet(f"Keyword Research - {topic}")
-    _style_header(
-        research,
-        [
-            "Keyword",
-            "Volume",
-            "KD",
-            "Intent",
-            "CPC",
-            "SERP features",
-            "Thị trường",
-            "Batch ID",
-        ],
-    )
-    for r in data["keyword_overview"]:
-        research.append(
-            [
-                r[k]
-                for k in (
-                    "keyword",
-                    "volume",
-                    "kd",
-                    "intent",
-                    "cpc",
-                    "serp_features",
-                    "market",
-                    "batch_id",
-                )
-            ]
-        )
-    serp = wb.create_sheet(f"SERP Check - {topic}")
-    _style_header(
-        serp,
-        [
-            "Keyword",
-            "Vị trí",
-            "URL",
-            "Title",
-            "Loại trang",
-            "Dữ liệu gốc (Page AS/Ref.Domains)",
-        ],
-    )
-    for r in data.get("serp_check", []):
-        serp.append(
-            [
-                r["keyword"],
-                r["position"],
-                r["url"],
-                r["title"],
-                r["page_type"],
-                json.dumps(r["raw"], ensure_ascii=False),
-            ]
-        )
-    mapping = wb.create_sheet(f"Keyword Mapping - {topic}")
-    _style_header(
-        mapping,
-        [
-            "Keyword chính",
-            "Keyword phụ",
-            "Loại nội dung",
-            "Ưu tiên",
-            "Volume",
-            "KD",
-            "Intent",
-            "URL dự kiến",
-            "Trạng thái SERP",
-            "Duyệt",
-            "Revision",
-            "Fingerprint",
-            "Ghi chú",
-        ],
-    )
-    for m in data["keyword_mapping"]:
-        mapping.append(
-            [
-                m["primary_keyword"],
-                "; ".join(m["secondary_keywords"]),
-                m.get("handoff", {}).get("backlog_label", m["page_type"]),
-                m["priority"],
-                m["volume"],
-                m["kd"],
-                m["intent"],
-                m["proposed_url"],
-                m["serp_status"],
-                m["approval_state"],
-                m["revision"],
-                m["content_fingerprint"],
-                m["merge_split_proposal"],
-            ]
-        )
-    business_headers = [
-        "Mã bài",
-        "Mã nội dung gốc",
-        "Tên bài dự kiến",
-        "Lý do ưu tiên",
-        "Keyword phụ có số",
-        "Câu hỏi gợi ý chưa xác minh",
-        "Giai đoạn",
-        "Góc bài",
-        "Loại trang top 10",
-        "Ý bắt buộc",
-        "Khoảng trống",
-        "SERP features",
-        "Độ dài tham khảo",
-        "Độ mạnh top 10",
-        "Link nội bộ",
-        "Nguồn pháp lý cần dẫn",
-        "Ghi chú duyệt",
-        "Trạng thái brief",
-    ]
-    for col, label in enumerate(business_headers, 14):
-        mapping.cell(1, col, label)
-    for row_index, m in enumerate(data["keyword_mapping"], 2):
-        handoff = m.get("handoff", {})
-        serp = handoff.get("analysis", {})
-        analysis = serp.get("analysis", {})
-        matching = next(
-            (b for b in data["content_briefs"] if b["keyword_mapping_id"] == m["id"]),
-            None,
-        )
-        values = [
-            matching["br_code"] if matching else m["id"],
-            handoff.get("content_code", ""),
-            handoff.get("content_title", m["primary_keyword"]),
-            handoff.get("priority_reason", ""),
-            handoff.get("verified_secondary", []),
-            handoff.get("suggested_questions", []),
-            handoff.get("funnel_stage", ""),
-            handoff.get("content_title", ""),
-            serp.get("distribution", {}),
-            analysis.get("mandatory_ideas", []),
-            analysis.get("gaps", []),
-            analysis.get("serp_features", []),
-            analysis.get("length_reference", "Chưa đọc được"),
-            serp.get("top3_strength", []),
-            matching.get("internal_links", []) if matching else [],
-            analysis.get("legal_sources_needed", []),
-            "",
-            matching["status"] if matching else "Chưa tạo",
-        ]
-        for col, value in enumerate(values, 14):
-            mapping.cell(
-                row_index,
-                col,
-                (
-                    json.dumps(value, ensure_ascii=False)
-                    if isinstance(value, (dict, list))
-                    else value
-                ),
-            )
-    log = wb.create_sheet(f"Nhat ky - {topic}")
-    _style_header(log, ["Mã lý do", "Nội dung", "Cần duyệt", "Chi tiết"])
-    for e in data.get("events", []):
-        log.append(
-            [
-                e["code"],
-                e["message"],
-                bool(e["details"].get("needs_review")),
-                json.dumps(e["details"], ensure_ascii=False),
-            ]
-        )
     sheet = wb.create_sheet(f"SEO Content Brief - {topic}")
     briefs = [b for b in data["content_briefs"] if b["content_type"] == "ARTICLE"]
-    sheet.append(
-        [
-            "BẢNG ĐIỀU HÀNH",
-            "Tổng bài",
-            len(briefs),
-            "Số P1",
-            sum(b["priority"] == "P1" for b in briefs),
-        ]
-    )
-    sheet.append(
-        [
-            "Tổng Search Volume key chính có số",
-            sum(b["metrics"].get("volume") or 0 for b in briefs),
-            "Tiến độ chính thức",
-            sum(b["brief_mode"] == "OFFICIAL" and not b["is_stale"] for b in briefs),
-        ]
-    )
+    sheet.sheet_view.showGridLines=False
+    sheet.append([None, f"SEO CONTENT BRIEF — BẢNG ĐIỀU HÀNH CHỦ ĐỀ {topic.upper()}"])
+    sheet.merge_cells("B1:J1")
+    sheet.append([None,"TỔNG QUAN QUẢN LÝ"]);sheet.merge_cells("B2:J2")
+    sheet.append([None,"TỔNG SỐ BÀI VIẾT",None,"ƯU TIÊN P1",None,"TỔNG SEARCH VOLUME",None,"TIẾN ĐỘ"])
+    sheet.append([None,len(briefs),None,sum(b["priority"]=="P1" for b in briefs),None,sum(b["metrics"].get("volume") or 0 for b in briefs),None,f"{sum(b['brief_mode']=='OFFICIAL' for b in briefs)}/{len(briefs)} chính thức"])
     sheet.append([])
-    sheet.append(["Mã bài", "Keyword chính", "Ưu tiên", "Trạng thái", "Đi tới brief"])
-    overview = []
+    sheet.append([None,"Mã bài","Tên bài / Hạng mục","Loại nội dung","Ưu tiên","Trạng thái","Keyword chính","Volume/tháng","URL dự kiến","Chi tiết Brief"])
+    overview=[]
     for b in briefs:
-        sheet.append(
-            [b["br_code"], b["primary_keyword"], b["priority"], b["brief_mode"]]
-        )
+        sheet.append([None,b["br_code"],b["seo_title"],"Bài viết",b["priority"],b["status"],b["primary_keyword"],b["metrics"].get("volume"),b["proposed_url"]])
         overview.append(sheet.max_row)
     for idx, b in enumerate(briefs):
         sheet.append([])
-        sheet.append([f"BRIEF {idx+1:02d}: {b['br_code']} — {b['primary_keyword']}"])
+        sheet.append([None,f"BRIEF {idx+1:02d}: {b['br_code']} — {b['primary_keyword']}"])
+        sheet.merge_cells(start_row=sheet.max_row,start_column=2,end_row=sheet.max_row,end_column=9)
         start = sheet.max_row
-        cell = sheet.cell(overview[idx], 5, "Xem Brief")
-        cell.hyperlink = f"#'{sheet.title}'!A{start}"
+        cell = sheet.cell(overview[idx], 10, "Xem Brief")
+        cell.hyperlink = f"#'{sheet.title}'!B{start}"
         cell.style = "Hyperlink"
-        cell = sheet.cell(start, 5, "Lên Overview")
-        cell.hyperlink = f"#'{sheet.title}'!A4"
+        cell = sheet.cell(start, 10, "Lên Overview")
+        cell.hyperlink = f"#'{sheet.title}'!B6"
         cell.style = "Hyperlink"
         for label, key in [
             ("Trạng thái", "brief_mode"),
@@ -510,6 +349,8 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
             sheet.append([None, label, b[key]])
         strategy = b.get("writing_strategy", {})
         for label, value in [
+            ("Volume / KD", f"{b['metrics'].get('volume') if b['metrics'].get('volume') is not None else 'Chưa có số'} / KD {b['metrics'].get('kd') if b['metrics'].get('kd') is not None else 'Chưa có số'}"),
+            ("Keyword phụ", "; ".join(b.get("secondary_keywords",[]))),
             ("Độ dài tham khảo", strategy.get("word_count_reference", "Chưa xác minh")),
             ("Nguồn pháp lý cần kiểm", "; ".join(strategy.get("legal_sources", []))),
             (
@@ -520,6 +361,7 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
             ("Checklist", "; ".join(b.get("seo_checklist", []))),
         ]:
             sheet.append([None, label, value])
+        sheet.append([None,"CẤU TRÚC OUTLINE H2",None,None,"HƯỚNG DẪN VIẾT & YÊU CẦU NỘI DUNG"])
         for heading in b.get("outline", []):
             sheet.append(
                 [None, heading["heading"], None, None, heading.get("notes", "")]
@@ -528,18 +370,6 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
                 sheet.append(
                     [None, "  " + child["heading"], None, None, child.get("notes", "")]
                 )
-    sheet.append([])
-    sheet.append(["BACKLOG — công cụ / tệp / dữ liệu"])
-    for m in data["keyword_mapping"]:
-        if m["page_type"] != "ARTICLE":
-            sheet.append(
-                [
-                    m["page_type"],
-                    m["primary_keyword"],
-                    m["proposed_url"],
-                    m["approval_state"],
-                ]
-            )
     for ws in wb:
         ws.freeze_panes = "B5" if ws == sheet else "A2"
         for row in ws:
@@ -552,6 +382,29 @@ def _build_xlsx(data: dict[str, Any]) -> bytes:
                     cell.value = "'" + cell.value
         for col in ("B", "C", "E"):
             ws.column_dimensions[col].width = 45
+    sheet.freeze_panes="G7"
+    sheet.column_dimensions['A'].width=3
+    for col,width in {'B':22,'C':45,'D':20,'E':20,'F':26,'G':35,'H':16,'I':34,'J':20}.items():sheet.column_dimensions[col].width=width
+    for row in sheet:
+        for cell in row:
+            cell.font=Font(name='Arial',size=10,color='18202C')
+            cell.fill=PatternFill('solid',fgColor='F8F8FB')
+        sheet.row_dimensions[row[0].row].height=42
+        if row[1].value:
+            if str(row[1].value).startswith(('BRIEF ', 'TỔNG QUAN','CẤU TRÚC','BACKLOG')) or row[0].row==6:
+                for cell in row[1:]:cell.fill=PatternFill('solid',fgColor='073763');cell.font=Font(name='Arial',size=11,bold=True,color='FFFFFF')
+            elif row[0].row>6 and row[2].value and not row[4].value:
+                row[1].fill=PatternFill('solid',fgColor='EEF3F9');row[1].font=Font(name='Arial',size=10,bold=True,color='1C3860')
+    for row in range(7,sheet.max_row+1):
+        if sheet.cell(row,2).value and sheet.cell(row,3).value is not None and sheet.cell(row,4).value is None and sheet.cell(row,5).value is None:
+            sheet.merge_cells(start_row=row,start_column=3,end_row=row,end_column=10)
+            sheet.row_dimensions[row].height=56
+        if sheet.cell(row,2).value and sheet.cell(row,5).value and sheet.cell(row,3).value is None:
+            sheet.merge_cells(start_row=row,start_column=2,end_row=row,end_column=4)
+            sheet.merge_cells(start_row=row,start_column=5,end_row=row,end_column=10)
+            sheet.row_dimensions[row].height=64
+    sheet['B1'].font=Font(name='Arial',size=14,bold=True,color='073763')
+    sheet.row_dimensions[1].height=48
     out = io.BytesIO()
     wb.save(out)
     return out.getvalue()

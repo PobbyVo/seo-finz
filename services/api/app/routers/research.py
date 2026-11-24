@@ -427,6 +427,9 @@ def confirm_semrush_import(
                 )
             )
 
+    db.flush()
+    from app.domain.keyword_expansion import refresh_candidates
+    refresh_candidates(db,project)
     upload.status = "CONFIRMED"
     upload.locale = payload.locale
     if req:
@@ -947,6 +950,12 @@ def analyze_serp_business(
     primaries = (
         db.query(SourceKeyword).filter_by(project_id=project_id, role="PRIMARY").all()
     )
+    from types import SimpleNamespace
+    from app.models import KeywordCandidate
+    known_primaries={s.keyword_normalized for s in primaries}
+    for candidate in db.query(KeywordCandidate).filter_by(project_id=project_id,candidate_type="RESEARCH_EXPANSION",status="PROMOTED").all():
+        if candidate.keyword_normalized not in known_primaries:
+            primaries.append(SimpleNamespace(keyword=candidate.keyword,keyword_normalized=candidate.keyword_normalized,content_code="",content_title=candidate.rationale,funnel_stage=""))
     for source in primaries:
         if keyword and source.keyword != keyword:
             continue

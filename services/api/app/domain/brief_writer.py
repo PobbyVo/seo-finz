@@ -248,6 +248,9 @@ def write_brief(db, project, mapping, mappings, *, secondary_keywords, serp_evid
     from app.domain.research_business import mapping_handoff
 
     ctx["handoff"] = mapping_handoff(db, project, mapping)
+    from app.domain.brief_engine import WRITING_FORMULAS, ENGAGEMENT_TACTICS
+    ctx["writing_formulas"] = WRITING_FORMULAS
+    ctx["engagement_tactics"] = ENGAGEMENT_TACTICS
     allowed = {m.proposed_url for m in mappings}
     prompt = (
         BRIEF_WRITER_SYSTEM_PROMPT

@@ -218,7 +218,12 @@ def _parse_topic_rows(
                 "source_row": offset,
             }
         )
-    return topics
+    unique = {}
+    for topic in topics:
+        code = topic["topic_pillar_code"]
+        if code not in unique:
+            unique[code] = topic
+    return list(unique.values())
 
 
 def _parse_keyword_rows(

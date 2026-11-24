@@ -202,8 +202,10 @@ def confirm_topic_source(
     project.language = payload.language.strip() or "vi"
     project.soft_article_min = payload.soft_article_min
     project.soft_article_max = max(payload.soft_article_min, payload.soft_article_max)
+    previous_policy = json.loads(project.provenance_json or "{}").get("exclude_keywords_without_volume",False)
     project.provenance_json = json.dumps(
         {
+            "exclude_keywords_without_volume": payload.exclude_keywords_without_volume if payload.exclude_keywords_without_volume is not None else previous_policy,
             "source_file": upload.filename,
             "upload_id": upload.id,
             "sha256": upload.sha256,

@@ -417,3 +417,12 @@ Khi cần kiểm tra sâu hơn, mở **Nhật ký hệ thống → Làm mới**.
 ### Chờ sếp chốt
 
 Ngưỡng P1/P2, số trang đọc, tuổi dữ liệu, số vòng bổ sung và sửa brief đều là đề xuất và có thể sửa trong Settings. Quyết định giữ P0 và cho phép brief nháp chưa duyệt nằm trong cấu hình; chưa tự tạo ưu tiên P0 khi chưa có quy tắc nghiệp vụ được chốt. Tỷ lệ thuế/bảo hiểm và văn bản hiện hành cần biên tập viên xác minh trước khi xuất bản bài viết.
+
+
+### Mở rộng tới 5–7 bài có bằng chứng
+
+Bước 03 có panel **Mở rộng nghiên cứu hướng tới 5–7 bài**. Bấm **Lọc Volume và tạo đề xuất Semrush** để bật chính sách cho dự án: keyword thiếu Volume hoặc Volume 0 không vào mapping/brief; dữ liệu nguồn vẫn được giữ và xuất trong phần loại khỏi kế hoạch. File nhập qua UI mặc định bật bộ lọc này. Volume thấp nhưng dương không bị tự loại chỉ vì thấp.
+
+Sao chép danh sách đề xuất mới vào Semrush Keyword Overview bulk (VN). Tải kết quả về Bước 04; keyword có Volume dương chuyển sang chờ duyệt chủ đề. Sau khi bạn duyệt và chọn đưa vào nghiên cứu, chạy lại mapping, kiểm tra SERP/intent và duyệt mapping hiện hành. Related/Questions giúp tìm biến thể; SERP cho từng key dự kiến giúp quyết định tách/gộp. Keyword mới chưa có số không được tính là bài; các biến thể gross/net không tự thành nhiều URL.
+
+Output brief có bảng điều hành, tổng quan B6:J, liên kết đến từng khối, nhãn cột B/nội dung cột C và heading cột B/hướng dẫn cột E. Công cụ, tệp và dữ liệu nằm ở Backlog. Tổng số bài và tổng Volume chỉ tính ARTICLE; không sao chép số liệu mẫu.

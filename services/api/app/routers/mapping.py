@@ -326,6 +326,11 @@ def decide_approval(
             target_km.content_status = dec["recommended_content_status"]
         elif approval.scope == "RESEARCH_ONLY":
             candidate=db.get(KeywordCandidate,approval.target_ref)
+            if candidate and candidate.project_id==project.id and candidate.candidate_type=="RESEARCH_EXPANSION":
+                from app.domain.keyword_expansion import volume_for
+                if (volume_for(db,project,candidate.keyword) or 0)<=0:raise HTTPException(422,'Chủ đề mới cần Volume dương đã xác minh trước khi duyệt.')
+                candidate.status="APPROVED"
+                candidate.source_ref_valid=True
             if candidate and candidate.project_id==project.id and candidate.candidate_type=="SECONDARY_PROPOSAL":
                 refs=json.loads(candidate.source_refs_json or "[]")
                 content=next((ref.removeprefix("CONTENT:") for ref in refs if ref.startswith("CONTENT:")),None)

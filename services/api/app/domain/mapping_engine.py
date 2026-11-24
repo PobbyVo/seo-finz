@@ -453,6 +453,7 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
                 }
             )
 
+    analyst_units = list(source_units)
     if not project.content_code:
         source_rows = db.query(SourceKeyword).filter_by(project_id=project.id).all()
         primaries = [r for r in source_rows if r.role == "PRIMARY"]
@@ -469,6 +470,12 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
             if kind in {"TOOL", "DOWNLOAD", "UNKNOWN"} and source.keyword_normalized not in existing_seeds:
                 source_units.append({"logical_key":f"asset:{source.keyword_normalized}","dg":None,"name":source.keyword,"seeds":[source.keyword],"related":[],"page_type":kind,"coverage_type":"GAP","evidence":[source.source_ref],"missing":[],"business_note":"Backlog tài nguyên; FinZ hiện chỉ sản xuất bài viết."})
 
+    from app.models import KeywordCandidate
+    approved_expansions={c.keyword_normalized for c in db.query(KeywordCandidate).filter_by(project_id=project.id,candidate_type="RESEARCH_EXPANSION",status="PROMOTED").all()}
+    existing_seeds={normalize_text(k) for u in source_units for k in u["seeds"]}
+    for unit in analyst_units:
+        if unit["seeds"] and normalize_text(unit["seeds"][0]) in approved_expansions - existing_seeds:
+            source_units.append(unit)
     latest_analysis = {}
     for event in db.query(ProjectEvent).filter_by(project_id=project.id).order_by(ProjectEvent.created_at.asc()).all():
         analysis = json.loads(event.details_json or "{}").get("serp_analysis")
@@ -477,6 +484,12 @@ def build_keyword_mapping_preview(db: Session, project: Project, *, create_appro
         analysis=latest_analysis.get(normalize_text(unit["seeds"][0]),{}) if unit["seeds"] else {}
         if analysis.get("decision")=="BACKLOG" and analysis.get("distribution"):
             unit["page_type"]=max(analysis["distribution"],key=analysis["distribution"].get)
+
+    from app.domain.keyword_expansion import enabled, volume_for
+    if enabled(project):
+        source_units = [unit for unit in source_units if unit["seeds"] and (volume_for(db,project,unit["seeds"][0]) or 0)>0]
+        for unit in source_units:
+            unit["related"]=[keyword for keyword in unit["related"] if (volume_for(db,project,keyword) or 0)>0]
 
     target_mapping = next((m for m in existing_mappings if m.id == target_mapping_id), None) if target_mapping_id else None
     if target_mapping_id and target_mapping is None:

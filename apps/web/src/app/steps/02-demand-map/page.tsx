@@ -79,6 +79,7 @@ export default function Step02DemandMapPage() {
         msg += ` | Gemini hạ bậc: ${res.fallback_events.map((e) => e.reason).join(' ')}`;
       }
       setRunInfo(msg);
+      showCompletionPopup({title:"Đã hoàn tất phân tích",message:"Đã lưu kết quả phân tích vào dự án.",nextStepHref:"/steps/03-semrush",nextStepLabel:"Bước 03 — Phiếu Semrush",navigationEligible:true});
       await loadDemandMap();
       await refreshProjects(activeProject.id);
     } catch (err) {

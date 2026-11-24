@@ -176,6 +176,7 @@ export default function Step01TopicPage() {
             selected_topic_pillar_code: tpCode,
             selected_content_code: contentCode,
             source_scope: wholePillar ? "PILLAR" : "CONTENT",
+            exclude_keywords_without_volume: true,
             pillar_name: pillarName,
             topic_pillar_name: tpName,
             topic_type: topicType,
@@ -290,6 +291,7 @@ export default function Step01TopicPage() {
         )}
 
         <label className="flex gap-2 text-sm"><input type="checkbox" checked={wholePillar} onChange={e=>setWholePillar(e.target.checked)}/>Nghiên cứu toàn bộ mã nội dung trong pillar khi xác nhận file</label>
+      <p className="text-xs text-slate-400">Keyword thiếu Volume hoặc Volume 0 sẽ không vào kế hoạch bài viết; dữ liệu nguồn vẫn được giữ để nghiên cứu Semrush.</p>
       {preview && (
           <div className="space-y-4 rounded-xl border border-slate-700/80 bg-surface-850 p-4">
             <div className="flex flex-wrap gap-3 text-xs text-slate-300">

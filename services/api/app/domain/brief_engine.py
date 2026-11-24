@@ -127,6 +127,8 @@ def generate_content_briefs(
     )
     if mapping_ids:
         query = query.filter(KeywordMapping.id.in_(mapping_ids))
+    from app.domain.keyword_expansion import enabled
+    if enabled(project):query=query.filter(KeywordMapping.volume > 0)
     mappings = query.order_by(KeywordMapping.priority.asc(), KeywordMapping.created_at.asc()).all()
 
     if not mappings:
@@ -148,7 +150,7 @@ def generate_content_briefs(
         handoff=mapping_handoff(db,project,mapping)
         if not mapping.is_approved:record_decision(db,project.id,"V-CHUA-DUYET",f"{mapping.primary_keyword}: chưa duyệt mapping hiện hành.",needs_review=True,mapping_id=mapping.id)
         analysis=handoff.get("analysis",{})
-        if handoff.get("funnel_stage") and (analysis.get("decision") != "ARTICLE" or analysis.get("selected_batch_id") != decisions[mapping.id]["serp_evidence"].get("selected_batch_id")):
+        if (handoff.get("funnel_stage") or enabled(project)) and (analysis.get("decision") != "ARTICLE" or analysis.get("selected_batch_id") != decisions[mapping.id]["serp_evidence"].get("selected_batch_id")):
             record_decision(db,project.id,"V-THIEU-DU-LIEU",f"{mapping.primary_keyword}: cần phân tích SERP hiện hành trước khi viết chính thức.",needs_review=True,mapping_id=mapping.id)
             decisions[mapping.id] = {**decisions[mapping.id], "eligible_official":False, "recommended_content_status":"RESEARCH_REQUIRED", "blockers":[*decisions[mapping.id]["blockers"], {"code":"V-THIEU-DU-LIEU", "reason":"Cổng nghiệp vụ V2: cần phân tích SERP hiện hành kết luận đủ điều kiện bài viết.", "impact":"Chỉ được tạo bản nháp.", "solution":"Chạy F5 và duyệt mapping hiện hành."}]}
     eligible_list = [km for km in mappings if decisions[km.id]["eligible_official"]]
@@ -322,7 +324,7 @@ def generate_content_briefs(
         brief.writing_strategy_json = json.dumps(
             {**writing_strategy, "title_variants": title_variants}, ensure_ascii=False
         )
-        payload, writer_errors = write_brief(db, project, km, mappings, secondary_keywords=secondary_kws, serp_evidence=serp_ev)
+        payload, writer_errors = write_brief(db, project, km, db.query(KeywordMapping).filter_by(project_id=project.id, is_archived=False).all(), secondary_keywords=secondary_kws, serp_evidence=serp_ev)
         brief.seo_title = payload["title_variants"][0]
         brief.h1 = payload["h1"]
         brief.meta_description = payload["meta_description"]

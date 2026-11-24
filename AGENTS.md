@@ -21,4 +21,10 @@
 - `SERP_ANALYST` labels and public-page reads are hypotheses above immutable uploaded evidence. Store human corrections separately in ProjectEvent; do not rewrite uploaded evidence rows.
 - `BRIEF_WRITER` must validate structured output and F7. Invalid output gets one retry; quality repairs use runtime thresholds. Failed output stays DRAFT / NEEDS_HUMAN_EDIT, clearly marked FALLBACK.
 - Only ARTICLE gets article briefs. Tool/file/data opportunities belong to Backlog and never inflate ARTICLE counts.
-- XLSX has five subject sheets; test hyperlinks against actual brief block rows and preserve historical export bytes.
+- Exports contain only SEO Content Brief; XLSX has one brief sheet; test hyperlinks against actual brief block rows and preserve historical export bytes.
+
+## Research policy for P01 expansion
+- Imported projects created through the UI default to excluding missing/zero Semrush Volume from the plan, while preserving all original SourceKeyword rows. Legacy API projects retain their existing policy unless explicitly enabled. Preserve policy on source re-import.
+- New research candidates have unknown Volume/KD until a matching upload verifies them. Do not count them toward 5–7 ARTICLEs or create mappings before human topic approval/promotion.
+- Keep gross/net synonyms in one intent cluster. New P01 research seeds live in `knowledge/p01_research_seeds.json`; these are hypotheses, never verified search demand.
+- Brief exports follow the reference dashboard/overview/block layout. Keep TOOL/DOWNLOAD/data items in Backlog; retain source exclusions and waiting-Semrush candidates in the research sheet.

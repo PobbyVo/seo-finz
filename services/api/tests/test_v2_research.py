@@ -88,19 +88,14 @@ def test_p01_tickets_and_offline_serp(client):
     import io, openpyxl
 
     workbook = openpyxl.load_workbook(io.BytesIO(export.content))
-    assert workbook.sheetnames == [
-        "Keyword Research - Luong",
-        "SERP Check - Luong",
-        "Keyword Mapping - Luong",
-        "Nhat ky - Luong",
-        "SEO Content Brief - Luong",
-    ]
+    assert workbook.sheetnames == ["SEO Content Brief - Luong"]
     ws = workbook.worksheets[-1]
+    assert not any("BACKLOG" in str(cell.value) for row in ws for cell in row)
     links = [cell for row in ws for cell in row if cell.value == "Xem Brief"]
     assert len(links) == 2
     for cell in links:
-        target = int(cell.hyperlink.target.rsplit("A", 1)[1])
-        assert ws.cell(target, 1).value.startswith("BRIEF")
+        target = int(cell.hyperlink.target.rsplit("B", 1)[1])
+        assert ws.cell(target, 2).value.startswith("BRIEF")
     before = tc.get(f"/api/v1/projects/{pid}/opportunities").json()["mappings"]
     approvals = tc.get(f"/api/v1/projects/{pid}/approvals").json()["approvals"]
     selected = next(a for a in approvals if a["target_ref"] == before[0]["id"])
